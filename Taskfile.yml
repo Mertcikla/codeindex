@@ -1,0 +1,17 @@
+version: '3'
+
+tasks:
+  test:
+    desc: Run all module tests
+    cmds:
+      - go test ./...
+
+  build:
+    desc: Build the CLI
+    cmds:
+      - go build -o bin/codeindex ./cmd/codeindex
+
+  parity:
+    desc: Byte-compare an extraction against the goldens (pass repo paths after --)
+    cmds:
+      - go run ./cmd/codeindex index --golden-dir testdata/parity {{.CLI_ARGS}}

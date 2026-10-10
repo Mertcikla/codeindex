@@ -1,0 +1,4 @@
+codeindex-out/
+bin/
+*.test
+.DS_Store
