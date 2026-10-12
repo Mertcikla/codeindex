@@ -1,7 +1,3 @@
-buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261010192512-dd1ec4713d1c.2 h1:gQ627y10ruA+aRp6iR4/Xzi+bZOkvckXbDFOsNy1MXc=
-buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261010192512-dd1ec4713d1c.2/go.mod h1:OT+/iaTobfaK4jNHgDkQtoQBtydsJdcpQ3+/iQe22eI=
-buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261011203013-884af1e0512c.2 h1:Dt8c39YS1lZjwE2TdZnwO0x412RSqLvDBG1lK+b2NyE=
-buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261011203013-884af1e0512c.2/go.mod h1:OT+/iaTobfaK4jNHgDkQtoQBtydsJdcpQ3+/iQe22eI=
 buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261012095416-f5a9ce65b701.2 h1:psRrt8V3/OvFwp8zi+n6Xt9obYdRjdr+Bo7Or8CW1hs=
 buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261012095416-f5a9ce65b701.2/go.mod h1:OT+/iaTobfaK4jNHgDkQtoQBtydsJdcpQ3+/iQe22eI=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

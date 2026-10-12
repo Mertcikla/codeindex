@@ -20,3 +20,4 @@ tasks:
     desc: update from bsr
     cmds:
       - go get buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go@$(buf registry sdk version --module=buf.build/tldiagramcom/diagram --plugin=buf.build/protocolbuffers/go)
+      - go mod tidy
