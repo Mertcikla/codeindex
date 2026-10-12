@@ -3,7 +3,7 @@ module github.com/mertcikla/codeindex
 go 1.26.2
 
 require (
-	buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261011203013-884af1e0512c.2
+	buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go v1.36.12-20261012095416-f5a9ce65b701.2
 	github.com/cespare/xxhash/v2 v2.3.0
 )
 
