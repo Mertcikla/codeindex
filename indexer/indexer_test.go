@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
@@ -702,5 +704,45 @@ func TestToolCancellationStopsPipeline(t *testing.T) {
 	})
 	if !sawRun || !errors.Is(err, context.Canceled) || snap != nil {
 		t.Fatalf("cancellation became a completed snapshot: run=%v snap=%v err=%v", sawRun, snap, err)
+	}
+}
+
+func TestRunPlansRunsConcurrently(t *testing.T) {
+	const n = 3
+	if runtime.GOMAXPROCS(0) < n {
+		t.Skip("not enough parallelism to observe concurrent runs")
+	}
+	plans := make([]*projectPlan, n)
+	errs := make([]error, n)
+	started := make(chan struct{}, n)
+	release := make(chan struct{})
+	failure := errors.New("fixture failure")
+	for i := range plans {
+		i := i
+		plans[i] = &projectPlan{run: func(context.Context) error {
+			started <- struct{}{}
+			<-release
+			if i == 1 {
+				return failure
+			}
+			return nil
+		}}
+	}
+	done := make(chan struct{})
+	go func() {
+		runPlans(context.Background(), plans, errs)
+		close(done)
+	}()
+	for range n {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("planned tool runs did not run concurrently")
+		}
+	}
+	close(release)
+	<-done
+	if !errors.Is(errs[1], failure) || errs[0] != nil || errs[2] != nil {
+		t.Fatalf("plan errors = %v, want only index 1 failing", errs)
 	}
 }

@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -329,5 +330,44 @@ echo indexed >> "$TLD_SCIP_TEST_COUNTER"
 	}
 	if !reflect.DeepEqual(normalizeGraph(t, incremental), normalizeGraph(t, fresh)) {
 		t.Fatal("cached project output differs from fresh")
+	}
+}
+
+func TestIncrementalInvalidatesOnUnindexedManifestChange(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if output, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	path := filepath.Join(root, "asset.bin")
+	if err := os.WriteFile(path, []byte{0, 1}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}, {"add", "."}, {"commit", "-m", "initial"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	pipeline := Pipeline{Config: config.Default()}
+	req := &pb.IndexRequest{Directory: root}
+	snap, g, err := pipeline.Build(ctx, req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.GetManifest().GetComplete() {
+		t.Fatal("missing complete manifest")
+	}
+	if err := os.WriteFile(path, []byte{0, 2}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	next, _, reused, err := pipeline.BuildIncremental(ctx, req, nil, baseFor(snap, g))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused || next.Id == snap.Id {
+		t.Fatal("unindexed edit reused previous snapshot")
+	}
+	if next.GetManifest().GetFiles()[0].Hash == snap.GetManifest().GetFiles()[0].Hash {
+		t.Fatal("manifest not updated")
 	}
 }

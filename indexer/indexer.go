@@ -8,14 +8,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/gitstate"
 	"github.com/mertcikla/codeindex/graph"
 	"github.com/mertcikla/codeindex/metrics"
 	"github.com/mertcikla/codeindex/tools"
@@ -156,7 +159,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	before, revision, branch, provenance, beforeInputs, err := fingerprintInputs(ctx, root, p.Config, req, projects, sources)
+	before, revision, branch, provenance, beforeInputs, manifestCache, err := fingerprintInputs(ctx, root, p.Config, req, projects, sources, nil)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -190,6 +193,10 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	snap.GitRevision = revision
 	snap.GitBranch = branch
 	snap.CommitMessage = commitSubject(ctx, root)
+	snap.Manifest, manifestCache, err = gitstate.ManifestCached(ctx, root, manifestCache)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	snap.ToolVersions = map[string]string{
 		"gotreesitter": gotreesitterVersion(),
 	}
@@ -234,6 +241,8 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	totalProjects := len(projects)
 	emitProgress(progress, Progress{Stage: "scip", Total: int64(totalProjects)})
 	doneScip := p.measure("scip")
+	plans := make([]*projectPlan, len(projects))
+	planErrs := make([]error, len(projects))
 	for i, pr := range projects {
 		family := languageFamily(pr.Language)
 		scipBacked := !isSyntaxFamily(family)
@@ -245,13 +254,25 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 		projectDir := filepath.Join(root, filepath.FromSlash(pr.Root))
 		projectKey := family + "|" + pr.Root
 		fingerprint := projectFingerprints[projectKey]
-		if err := p.indexProject(ctx, g, snap, req, pr, family, scipBacked, table, root, projectDir, projectKey, fingerprint, tmp, i, totalProjects, base, progress); err != nil {
+		plans[i], planErrs[i] = p.planProject(ctx, g, req, pr, family, scipBacked, root, projectDir, projectKey, fingerprint, tmp, i, totalProjects, base, progress)
+	}
+	runPlans(ctx, plans, planErrs)
+	for i, pr := range projects {
+		if ctx.Err() != nil {
+			return nil, nil, false, ctx.Err()
+		}
+		if err := planErrs[i]; err != nil {
+			// One project failing must not discard the rest of the repository:
+			// record a warning and keep indexing siblings.
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("%s (%s): %v", pr.Root, languageFamily(pr.Language), err))
+			table.skip = nil
+			continue
+		}
+		if err := p.importProject(ctx, g, snap, table, plans[i]); err != nil {
 			if ctx.Err() != nil {
 				return nil, nil, false, ctx.Err()
 			}
-			// One project failing must not discard the rest of the repository:
-			// record a warning and keep indexing siblings.
-			snap.Warnings = append(snap.Warnings, fmt.Sprintf("%s (%s): %v", pr.Root, family, err))
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("%s (%s): %v", pr.Root, languageFamily(pr.Language), err))
 			table.skip = nil
 			continue
 		}
@@ -276,7 +297,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	after, _, _, _, afterInputs, err := fingerprintInputs(ctx, root, p.Config, req, afterProjects, afterSources)
+	after, _, _, _, afterInputs, _, err := fingerprintInputs(ctx, root, p.Config, req, afterProjects, afterSources, manifestCache)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -290,88 +311,97 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	return snap, g, false, nil
 }
 
-// indexProject indexes one discovered project into g. Errors are returned for
-// the caller to record as a warning so a single failing project cannot abort the
-// repository; projects are independent except for cross-project symbol bindings
-// applied later by table.apply.
-func (p Pipeline) indexProject(
-	ctx context.Context,
-	g *graph.Graph,
-	snap *pb.Snapshot,
-	req *pb.IndexRequest,
-	pr *pb.Project,
-	family string,
-	scipBacked bool,
-	table *symbols,
-	root, projectDir, projectKey, fingerprint, tmp string,
-	index, total int,
-	base *IncrementalBase,
-	progress ProgressFunc,
-) error {
+// projectPlan is one project's SCIP preparation: how its artifact is obtained
+// and everything the import phase needs. Planning is sequential (it decides
+// cache reuse and resolves tools); tool execution runs in parallel; imports
+// stay sequential so the graph and symbol tables mutate deterministically.
+type projectPlan struct {
+	project     *pb.Project
+	scipBacked  bool
+	projectDir  string
+	projectKey  string
+	fingerprint string
+
+	toolName    string
+	toolVersion string
+
+	cached      *graph.ProjectArtifact
+	strict      bool
+	preExisting bool
+	artifact    string
+	run         func(context.Context) error
+}
+
+// planProject decides how one project's SCIP artifact is produced: reuse from
+// the incremental base when its fingerprint and tool version match, an explicit
+// caller artifact, or a tool run. The returned run function, when non-nil, is
+// safe to execute concurrently with other projects' runs.
+func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, req *pb.IndexRequest, pr *pb.Project, family string, scipBacked bool, root, projectDir, projectKey, fingerprint, tmp string, index, total int, base *IncrementalBase, progress ProgressFunc) (*projectPlan, error) {
+	plan := &projectPlan{project: pr, scipBacked: scipBacked, projectDir: projectDir, projectKey: projectKey, fingerprint: fingerprint}
 	if base != nil && req.ScipArtifacts[pr.Root] == "" {
 		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok && cached.Fingerprint == fingerprint {
 			spec, err := indexerForFamily(family, p.Config)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			exe, resolveErr := tools.ResolveName(spec.executable(p.Config, indexerContext{projectDir: projectDir, root: root}))
 			if resolveErr != nil {
-				return resolveErr
+				return nil, resolveErr
 			}
 			version := toolVersion(ctx, exe, spec.versionArgs)
 			if version == base.Snapshot.ToolVersions[spec.name] {
-				snap.ToolVersions[spec.name] = version
-				hashes := projectHashes(pr, g.Sources)
+				plan.cached = &cached
+				plan.toolName, plan.toolVersion = spec.name, version
 				emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: fmt.Sprintf("reusing cached · %s · %s", spec.name, pr.Root)})
-				if err := importSCIPReader(ctx, g, pr, bytes.NewReader(cached.Data), hashes, false, scipBacked, table); err != nil {
-					return err
-				}
-				g.ProjectArtifacts[projectKey] = cached
-				return nil
+				return plan, nil
 			}
 		}
 	}
-	artifact := req.ScipArtifacts[pr.Root]
-	strict := artifact != ""
-	preExisting := false
-	if artifact == "" {
-		spec, err := indexerForFamily(family, p.Config)
-		if err != nil {
-			return err
-		}
-		c := indexerContext{root: root, projectDir: projectDir, artifact: filepath.Join(tmp, fmt.Sprintf("%d.scip", index)), name: filepath.Base(projectDir), configPath: pr.ConfigPath}
-		if family == familyWeb {
-			c.sourceFiles = webSourceFiles(root, pr.Root, g.Sources)
-		}
-		tool, err := tools.ResolveName(spec.executable(p.Config, c))
-		if err != nil {
-			return fmt.Errorf("%s unavailable: %w", spec.name, err)
-		}
-		snap.ToolVersions[spec.name] = toolVersion(ctx, tool, spec.versionArgs)
-		argv, explicit, err := spec.args(p.Config, c)
-		if err != nil {
-			return err
-		}
-		if generated := inferredTsconfig(projectDir, argv); generated != "" {
-			// scip-typescript writes an inferred tsconfig.json into the project;
-			// remove it so indexing does not dirty the checkout or change the
-			// post-index input fingerprint.
+	if artifact := req.ScipArtifacts[pr.Root]; artifact != "" {
+		plan.strict = true
+		plan.artifact = artifact
+		return plan, nil
+	}
+	spec, err := indexerForFamily(family, p.Config)
+	if err != nil {
+		return nil, err
+	}
+	c := indexerContext{root: root, projectDir: projectDir, artifact: filepath.Join(tmp, fmt.Sprintf("%d.scip", index)), name: filepath.Base(projectDir), configPath: pr.ConfigPath}
+	if family == familyWeb {
+		c.sourceFiles = webSourceFiles(root, pr.Root, g.Sources)
+	}
+	tool, err := tools.ResolveName(spec.executable(p.Config, c))
+	if err != nil {
+		return nil, fmt.Errorf("%s unavailable: %w", spec.name, err)
+	}
+	plan.toolName = spec.name
+	plan.toolVersion = toolVersion(ctx, tool, spec.versionArgs)
+	argv, explicit, err := spec.args(p.Config, c)
+	if err != nil {
+		return nil, err
+	}
+	implicitArtifact := filepath.Join(projectDir, "index.scip")
+	plan.artifact = implicitArtifact
+	if explicit {
+		plan.artifact = c.artifact
+	} else if _, statErr := os.Stat(implicitArtifact); statErr == nil {
+		// Detect a user-supplied artifact before the tool runs so a generated
+		// one can be cleaned up without deleting theirs.
+		plan.preExisting = true
+	}
+	generated := inferredTsconfig(projectDir, argv)
+	runTool := func(args []string) ([]byte, error) {
+		toolCtx, cancel := context.WithTimeout(ctx, p.Config.ToolTimeout())
+		defer cancel()
+		return tools.Run(toolCtx, tool, args, projectDir)
+	}
+	plan.run = func(context.Context) error {
+		if generated != "" {
+			// scip-typescript writes an inferred tsconfig.json into the
+			// project; remove it so indexing does not dirty the checkout or
+			// change the post-index input fingerprint.
 			defer func() { _ = os.Remove(generated) }()
 		}
-		implicitArtifact := filepath.Join(projectDir, "index.scip")
-		if !explicit {
-			// Detect a user-supplied artifact before the tool runs so a
-			// generated one can be cleaned up without deleting theirs.
-			if _, statErr := os.Stat(implicitArtifact); statErr == nil {
-				preExisting = true
-			}
-		}
-		runTool := func(args []string) ([]byte, error) {
-			toolCtx, cancel := context.WithTimeout(ctx, p.Config.ToolTimeout())
-			defer cancel()
-			return tools.Run(toolCtx, tool, args, projectDir)
-		}
-		emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: fmt.Sprintf("running %s · %s", spec.name, pr.Root)})
 		out, runErr := runTool(argv)
 		if runErr != nil && !errors.Is(runErr, context.DeadlineExceeded) && !errors.Is(runErr, context.Canceled) && spec.fallbackArgs != nil {
 			// Extra projects are an enrichment; when one of them breaks the
@@ -379,41 +409,88 @@ func (p Pipeline) indexProject(
 			if fallback, fallbackExplicit, fallbackErr := spec.fallbackArgs(p.Config, c); fallbackErr == nil && len(fallback) > 0 && !slices.Equal(fallback, argv) {
 				_ = os.Remove(c.artifact)
 				if retryOut, retryErr := runTool(fallback); retryErr == nil {
-					explicit, out, runErr = fallbackExplicit, retryOut, nil
+					plan.artifact, out, runErr = implicitArtifact, retryOut, nil
+					if fallbackExplicit {
+						plan.artifact = c.artifact
+					}
+					return nil
 				}
 			}
 		}
 		if runErr != nil {
 			return fmt.Errorf("%s failed in %s: %w: %s", spec.name, pr.Root, runErr, strings.TrimSpace(string(out)))
 		}
-		if explicit {
-			artifact = c.artifact
-		} else {
-			artifact = implicitArtifact
+		return nil
+	}
+	emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: fmt.Sprintf("running %s · %s", spec.name, pr.Root)})
+	return plan, nil
+}
+
+// runPlans executes every planned tool run with bounded parallelism. External
+// indexer processes dominate cold indexing, so they run concurrently while
+// artifact imports stay ordered.
+func runPlans(ctx context.Context, plans []*projectPlan, errs []error) {
+	limit := runtime.GOMAXPROCS(0)
+	if limit > len(plans) {
+		limit = len(plans)
+	}
+	if limit < 1 {
+		return
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, plan := range plans {
+		if errs[i] != nil || plan == nil || plan.run == nil {
+			continue
 		}
+		wg.Add(1)
+		go func(i int, plan *projectPlan) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			errs[i] = plan.run(ctx)
+		}(i, plan)
+	}
+	wg.Wait()
+}
+
+// importProject imports one prepared project's artifact into g. Errors are
+// returned for the caller to record as a warning so a single failing project
+// cannot abort the repository; projects are independent except for
+// cross-project symbol bindings applied later by table.apply.
+func (p Pipeline) importProject(ctx context.Context, g *graph.Graph, snap *pb.Snapshot, table *symbols, plan *projectPlan) error {
+	pr := plan.project
+	snap.ToolVersions[plan.toolName] = plan.toolVersion
+	if plan.cached != nil {
+		hashes := projectHashes(pr, g.Sources)
+		if err := importSCIPReader(ctx, g, pr, bytes.NewReader(plan.cached.Data), hashes, false, plan.scipBacked, table); err != nil {
+			return err
+		}
+		g.ProjectArtifacts[plan.projectKey] = *plan.cached
+		return nil
 	}
 	hashes := projectHashes(pr, g.Sources)
-	if strict {
-		manifest, err := verifySCIPManifest(artifact, pr.Root, g.Sources)
+	if plan.strict {
+		manifest, err := verifySCIPManifest(plan.artifact, pr.Root, g.Sources)
 		if err != nil {
 			return err
 		}
 		hashes = manifest
 	}
-	if err := importSCIP(ctx, g, pr, artifact, hashes, strict, scipBacked, table); err != nil {
+	if err := importSCIP(ctx, g, pr, plan.artifact, hashes, plan.strict, plan.scipBacked, table); err != nil {
 		table.skip = nil
-		return fmt.Errorf("import %s: %w", artifact, err)
+		return fmt.Errorf("import %s: %w", plan.artifact, err)
 	}
 	table.skip = nil
-	if !strict {
-		data, err := os.ReadFile(artifact)
+	if !plan.strict {
+		data, err := os.ReadFile(plan.artifact)
 		if err != nil {
 			return err
 		}
-		g.ProjectArtifacts[projectKey] = graph.ProjectArtifact{Fingerprint: fingerprint, Data: data}
+		g.ProjectArtifacts[plan.projectKey] = graph.ProjectArtifact{Fingerprint: plan.fingerprint, Data: data}
 	}
-	if !strict && !preExisting && artifact != "" && strings.HasPrefix(artifact, projectDir+string(filepath.Separator)) {
-		_ = os.Remove(artifact)
+	if !plan.strict && !plan.preExisting && plan.artifact != "" && strings.HasPrefix(plan.artifact, plan.projectDir+string(filepath.Separator)) {
+		_ = os.Remove(plan.artifact)
 	}
 	return nil
 }
@@ -457,16 +534,42 @@ func anyBaseSourceRemoved(sources map[string]*graph.Source, baseSources map[stri
 	return false
 }
 
+// toolVersionCache memoizes indexer version probes for the process lifetime.
+// Snapshot resolution probes every candidate's projects and both comparison
+// sides re-resolve the same candidate, so the same binary would otherwise be
+// spawned over a dozen times per command; each scip-* probe costs hundreds of
+// milliseconds. Failures are never cached so a transient error does not stick.
+var (
+	toolVersionMu    sync.Mutex
+	toolVersionCache = map[string]string{}
+)
+
 // toolVersion probes an indexer for its version, tolerating tools whose version
 // flag is unsupported or whose output format differs.
 func toolVersion(ctx context.Context, tool string, args []string) string {
+	key := tool
+	for _, arg := range args {
+		key += "\x00" + arg
+	}
+	toolVersionMu.Lock()
+	cached, ok := toolVersionCache[key]
+	toolVersionMu.Unlock()
+	if ok {
+		return cached
+	}
 	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := tools.Run(vctx, tool, args, "")
 	if err != nil || strings.HasPrefix(string(out), "[earlier tool output truncated]") {
 		return "unknown"
 	}
-	return strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0])
+	version := strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0])
+	if version != "" && version != "unknown" {
+		toolVersionMu.Lock()
+		toolVersionCache[key] = version
+		toolVersionMu.Unlock()
+	}
+	return version
 }
 
 func verifySCIPManifest(artifact, projectRoot string, sources map[string]*graph.Source) (map[string]string, error) {

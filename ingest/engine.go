@@ -45,6 +45,22 @@ func (e Engine) Base(ctx context.Context, id string) (*indexer.IncrementalBase, 
 	return &indexer.IncrementalBase{Snapshot: snap, Graph: g, Sources: sources}, nil
 }
 
+// snapshotRefs is an optional store capability: a repository's snapshots with
+// only the metadata revision resolution needs. Preparing a target resolves
+// against this listing repeatedly, so hosts whose full Snapshot listing computes
+// expensive per-record statistics can offer the cheaper query.
+type snapshotRefs interface {
+	SnapshotRefs(ctx context.Context, repositoryID string) ([]*pb.Snapshot, error)
+}
+
+// listSnapshots prefers the lightweight listing when the store provides it.
+func (e Engine) listSnapshots(ctx context.Context) ([]*pb.Snapshot, error) {
+	if refs, ok := e.Store.(snapshotRefs); ok {
+		return refs.SnapshotRefs(ctx, e.RepositoryID)
+	}
+	return e.Store.Snapshots(ctx, e.RepositoryID)
+}
+
 func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot, error) {
 	if target == nil {
 		return nil, fmt.Errorf("comparison target is required")
@@ -76,7 +92,7 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 		return snap, nil
 	}
 	revision, branch := target.GitRevision, target.GitBranch
-	snapshots, err := e.Store.Snapshots(ctx, e.RepositoryID)
+	snapshots, err := e.listSnapshots(ctx)
 	if err != nil {
 		return nil, err
 	}

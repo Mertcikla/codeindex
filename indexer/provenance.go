@@ -12,11 +12,12 @@ import (
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/gitstate"
 	"github.com/mertcikla/codeindex/graph"
 )
 
 // Bump when relationship semantics change, independently of syntax caches.
-const relationshipVersion = 1
+const relationshipVersion = 2
 
 // CaptureInputs fingerprints exactly the source/configuration inputs used by indexing.
 func CaptureInputs(ctx context.Context, root string, cfg config.Config, excludes []string) (fingerprint, revision, branch, provenance string, err error) {
@@ -40,7 +41,7 @@ func captureInputs(ctx context.Context, root string, cfg config.Config, req *pb.
 	if err != nil {
 		return "", "", "", "", err
 	}
-	fingerprint, revision, branch, provenance, _, err = fingerprintInputs(ctx, root, cfg, req, projects, sources)
+	fingerprint, revision, branch, provenance, _, _, err = fingerprintInputs(ctx, root, cfg, req, projects, sources, nil)
 	return fingerprint, revision, branch, provenance, err
 }
 
@@ -58,11 +59,21 @@ func commitSubject(ctx context.Context, root string) string {
 
 // fingerprintInputs hashes every input that determines a snapshot. It returns
 // the aggregate fingerprint plus a per-input digest so callers can report
-// exactly which inputs moved when a repository changes mid-index.
-func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req *pb.IndexRequest, projects []*pb.Project, sources map[string]*graph.Source) (fingerprint, revision, branch, provenance string, digest map[string]string, err error) {
+// exactly which inputs moved when a repository changes mid-index. manifestCache
+// carries hashes from an earlier pass; the returned cache can be threaded into
+// later passes so unchanged files are not re-read.
+func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req *pb.IndexRequest, projects []*pb.Project, sources map[string]*graph.Source, manifestCache gitstate.ManifestCache) (fingerprint, revision, branch, provenance string, digest map[string]string, manifests gitstate.ManifestCache, err error) {
 	digest = map[string]string{}
 	parts := []string{ConfigurationHash(cfg, req)}
 	digest["config"] = parts[0]
+	manifest, manifests, manifestErr := gitstate.ManifestCached(ctx, root, manifestCache)
+	if manifestErr != nil {
+		return "", "", "", "", nil, nil, manifestErr
+	}
+	for _, file := range manifest.Files {
+		parts = append(parts, "manifest:"+file.Path, file.Hash, file.Mode)
+		digest["manifest:"+file.Path] = file.Hash + ":" + file.Mode
+	}
 	artifactRoots := make([]string, 0, len(req.ScipArtifacts))
 	for key := range req.ScipArtifacts {
 		artifactRoots = append(artifactRoots, key)
@@ -71,7 +82,7 @@ func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req 
 	for _, key := range artifactRoots {
 		raw, e := os.ReadFile(req.ScipArtifacts[key])
 		if e != nil {
-			return "", "", "", "", nil, e
+			return "", "", "", "", nil, nil, e
 		}
 		hash := graph.Hash(raw)
 		parts = append(parts, key, hash)
@@ -89,7 +100,7 @@ func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req 
 	for _, project := range projects {
 		content, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(project.ConfigPath)))
 		if readErr != nil {
-			return "", "", "", "", nil, fmt.Errorf("read project configuration: %w", readErr)
+			return "", "", "", "", nil, nil, fmt.Errorf("read project configuration: %w", readErr)
 		}
 		hash := graph.Hash(content)
 		parts = append(parts, project.ConfigPath, hash)
@@ -99,7 +110,7 @@ func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req 
 			for _, name := range webProjectConfigs(projectDir) {
 				extra, extraErr := os.ReadFile(filepath.Join(projectDir, name))
 				if extraErr != nil {
-					return "", "", "", "", nil, fmt.Errorf("read project configuration: %w", extraErr)
+					return "", "", "", "", nil, nil, fmt.Errorf("read project configuration: %w", extraErr)
 				}
 				extraHash := graph.Hash(extra)
 				rel := filepath.ToSlash(filepath.Join(project.Root, name))
@@ -121,7 +132,7 @@ func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req 
 	}
 	parts = append(parts, revision)
 	digest["revision"] = revision
-	return graph.ID(parts...), revision, branch, provenance, digest, nil
+	return graph.ID(parts...), revision, branch, provenance, digest, manifests, nil
 }
 
 // inputDrift renders the difference between two fingerprint digests as a

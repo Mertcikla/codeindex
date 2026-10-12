@@ -212,7 +212,14 @@ func discover(ctx context.Context, root string, overrides, excludes []string, ba
 			return nil, nil, nil
 		}
 		if len(sources) == 0 {
-			return nil, nil, fmt.Errorf("no supported project found (Go, TypeScript/JavaScript, Python, C/C++, C#/Visual Basic, Dart, Java/Scala/Kotlin, PHP, Ruby, or Rust)")
+			if _, err := gitstate.Run(ctx, root, "rev-parse", "--git-dir"); err != nil {
+				if ctx.Err() != nil {
+					return nil, nil, ctx.Err()
+				}
+				return nil, nil, fmt.Errorf("no supported project found (Go, TypeScript/JavaScript, Python, C/C++, C#/Visual Basic, Dart, Java/Scala/Kotlin, PHP, Ruby, or Rust)")
+			}
+			// A Git-only manifest still supports complete file-change coverage.
+			// Unsupported or excluded files need no invented source facts.
 		}
 		// A repository with configuration or sources but no indexable project
 		// still publishes its infra facts and sources; code declarations are
