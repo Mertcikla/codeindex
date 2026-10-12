@@ -31,6 +31,10 @@ type Pipeline struct {
 	// Metrics, when non-nil, collects coarse per-stage timings and item counts
 	// for the indexing run. It is optional and safe to leave nil.
 	Metrics *metrics.Collector
+	// ManifestCache, when non-nil, persists file-content hashes across builds:
+	// a watcher's repeated scans only rehash files whose size, mtime, and mode
+	// moved. It is not safe for concurrent builds sharing the same pointer.
+	ManifestCache *gitstate.ManifestCache
 }
 
 // measure starts a coarse stage timer, folding the stage's item count in when
@@ -77,8 +81,10 @@ type IncrementalBase struct {
 
 // maxDriftAttempts bounds how many times a build restarts after repository
 // inputs change mid-index. Each retry carries the previous attempt's syntax
-// caches and SCIP artifacts, so only what moved is reindexed.
-const maxDriftAttempts = 3
+// caches and SCIP artifacts, so only what moved is reindexed. The bound is
+// generous because watchers run while people edit: a sustained burst should
+// converge as soon as the tree pauses for a moment, not fail the scan.
+const maxDriftAttempts = 5
 
 // inputDriftError reports that repository inputs changed while indexing. It
 // carries the partial build so the pipeline can retry incrementally instead of
@@ -125,9 +131,31 @@ func (p Pipeline) build(ctx context.Context, req *pb.IndexRequest, progress Prog
 			break
 		}
 		emitProgress(progress, Progress{Stage: "verify", Detail: fmt.Sprintf("inputs changed; retrying with incremental reuse (attempt %d/%d)", attempt+2, maxDriftAttempts)})
+		if err := driftBackoff(ctx, attempt); err != nil {
+			return nil, nil, false, err
+		}
 		base = &IncrementalBase{Graph: drift.graph, Snapshot: drift.snap, Sources: sourceHashes(drift.graph.Sources), unpublished: true}
 	}
 	return nil, nil, false, lastErr
+}
+
+// driftBackoff pauses before rebuilding after inputs moved mid-index. Editors
+// and formatters usually settle within a few hundred milliseconds, so a short
+// growing pause lets a watcher converge instead of burning attempts while the
+// tree is still moving.
+func driftBackoff(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * 150 * time.Millisecond
+	if delay > time.Second {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // sourceHashes projects a source set into the path-to-hash view used by
@@ -159,7 +187,12 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	before, revision, branch, provenance, beforeInputs, manifestCache, err := fingerprintInputs(ctx, root, p.Config, req, projects, sources, nil)
+	manifestCache := gitstate.ManifestCache(nil)
+	if p.ManifestCache != nil {
+		manifestCache = *p.ManifestCache
+		defer func() { *p.ManifestCache = manifestCache }()
+	}
+	before, revision, branch, provenance, beforeInputs, manifestCache, err := fingerprintInputs(ctx, root, p.Config, req, projects, sources, manifestCache)
 	if err != nil {
 		return nil, nil, false, err
 	}

@@ -9,6 +9,7 @@ import (
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/config"
 	"github.com/mertcikla/codeindex/gitstate"
+	"github.com/mertcikla/codeindex/graph"
 	"github.com/mertcikla/codeindex/indexer"
 	"github.com/mertcikla/codeindex/store"
 )
@@ -24,6 +25,9 @@ type Engine struct {
 	// for working-tree snapshots. Explicit captures publish durable saved points
 	// with their own marker instead of the transient working_tree provenance.
 	Provenance string
+	// Manifests, when non-nil, persists working-tree file hashes across builds so
+	// a watcher's repeated scans only rehash files that moved.
+	Manifests *gitstate.ManifestCache
 }
 
 func (e Engine) Base(ctx context.Context, id string) (*indexer.IncrementalBase, error) {
@@ -61,9 +65,19 @@ func (e Engine) listSnapshots(ctx context.Context) ([]*pb.Snapshot, error) {
 	return e.Store.Snapshots(ctx, e.RepositoryID)
 }
 
+// Prepare prepares a target and returns its snapshot.
 func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot, error) {
+	snap, _, _, err := e.PrepareWithGraph(ctx, target)
+	return snap, err
+}
+
+// PrepareWithGraph is Prepare plus the built graph and whether the snapshot was
+// reused unchanged. Watchers use the graph to summarize a scan without loading
+// the snapshot back from the store, and skip downstream comparison work when
+// nothing moved.
+func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.Snapshot, *graph.Graph, bool, error) {
 	if target == nil {
-		return nil, fmt.Errorf("comparison target is required")
+		return nil, nil, false, fmt.Errorf("comparison target is required")
 	}
 	count := 0
 	if target.SnapshotId != "" {
@@ -76,25 +90,25 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 		count++
 	}
 	if count != 1 {
-		return nil, fmt.Errorf("select exactly one snapshot, commit, or working tree")
+		return nil, nil, false, fmt.Errorf("select exactly one snapshot, commit, or working tree")
 	}
 	if target.SnapshotId != "" {
 		snap, err := e.Store.Snapshot(ctx, target.SnapshotId)
 		if err != nil {
-			return nil, err
+			return nil, nil, false, err
 		}
 		if snap.RepositoryId != e.RepositoryID {
-			return nil, fmt.Errorf("snapshot belongs to another repository")
+			return nil, nil, false, fmt.Errorf("snapshot belongs to another repository")
 		}
 		if snap.IngestionStatus != "complete" && snap.IngestionStatus != "" {
-			return nil, fmt.Errorf("snapshot indexing is incomplete")
+			return nil, nil, false, fmt.Errorf("snapshot indexing is incomplete")
 		}
-		return snap, nil
+		return snap, nil, true, nil
 	}
 	revision, branch := target.GitRevision, target.GitBranch
 	snapshots, err := e.listSnapshots(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
 	req := &pb.IndexRequest{Exclude: e.Exclude}
 	configHash := indexer.ConfigurationHash(e.Config, req)
@@ -109,13 +123,13 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 	}
 	if !target.WorkingTree && branch == "" {
 		if snap := find(revision); snap != nil {
-			return snap, nil
+			return snap, nil, true, nil
 		}
 	}
 	if !target.WorkingTree {
 		revision, err = gitstate.Resolve(ctx, e.Root, revision)
 		if err != nil {
-			return nil, err
+			return nil, nil, false, err
 		}
 		if branch == "" {
 			ref, _ := gitstate.Run(ctx, e.Root, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", target.GitRevision)
@@ -127,7 +141,7 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 			}
 		}
 		if snap := find(revision); snap != nil {
-			return snap, nil
+			return snap, nil, true, nil
 		}
 	}
 	var base *indexer.IncrementalBase
@@ -135,12 +149,14 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 		if snapshots[i].ConfigHash == configHash && snapshots[i].IngestionStatus == "complete" {
 			base, err = e.Base(ctx, snapshots[i].Id)
 			if err != nil {
-				return nil, err
+				return nil, nil, false, err
 			}
 			break
 		}
 	}
 	var snapshot *pb.Snapshot
+	var preparedGraph *graph.Graph
+	preparedReused := false
 	build := func(directory string) error {
 		if e.PrepareCheckout != nil {
 			if err := e.PrepareCheckout(ctx, directory); err != nil {
@@ -148,6 +164,9 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 			}
 		}
 		pipeline := indexer.Pipeline{Config: e.Config, RepositoryID: e.RepositoryID}
+		if target.WorkingTree {
+			pipeline.ManifestCache = e.Manifests
+		}
 		input := &pb.IndexRequest{Directory: directory, Exclude: e.Exclude, Incremental: base != nil}
 		snap, g, reused, err := pipeline.BuildIncremental(ctx, input, e.Progress, base)
 		if err != nil {
@@ -189,7 +208,7 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 				return err
 			}
 		}
-		snapshot = snap
+		snapshot, preparedGraph, preparedReused = snap, g, reused
 		return nil
 	}
 	if target.WorkingTree {
@@ -197,5 +216,5 @@ func (e Engine) Prepare(ctx context.Context, target *pb.Revision) (*pb.Snapshot,
 	} else {
 		err = gitstate.WithCommit(ctx, e.Root, revision, build)
 	}
-	return snapshot, err
+	return snapshot, preparedGraph, preparedReused, err
 }
