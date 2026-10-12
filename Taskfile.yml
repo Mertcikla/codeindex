@@ -15,3 +15,8 @@ tasks:
     desc: Byte-compare an extraction against the goldens (pass repo paths after --)
     cmds:
       - go run ./cmd/codeindex index --golden-dir testdata/parity {{.CLI_ARGS}}
+
+  proto:
+    desc: update from bsr
+    cmds:
+      - go get buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go@$(buf registry sdk version --module=buf.build/tldiagramcom/diagram --plugin=buf.build/protocolbuffers/go)
