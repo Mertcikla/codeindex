@@ -44,8 +44,8 @@ func TestPackageExportKeysIncludeEntryPoint(t *testing.T) {
 		t.Fatalf("entry points collapsed: %d/%d", len(base), len(next))
 	}
 	for key, e := range base {
-		if next[key] == nil || next[key].Id == e.Id || len(next[key].Evidence) != len(e.Evidence) {
-			t.Fatal("export identity or witnesses changed across snapshots")
+		if next[key] == nil || next[key].Id == e.Id || next[key].Anchor != nil || len(next[key].Evidence) != 0 || e.Anchor != nil || len(e.Evidence) != 0 {
+			t.Fatal("export identity changed or provenance was retained")
 		}
 	}
 }

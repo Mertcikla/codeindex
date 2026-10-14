@@ -26,7 +26,7 @@ func buildGraph(t *testing.T) (*graph.Graph, *pb.Snapshot) {
 	from := g.Facts[graph.ID("snap-1", "fact", "a.go", "10", "20", pb.FactKind_FACT_KIND_FUNCTION.String(), "Alpha")]
 	to := g.Facts[graph.ID("snap-1", "fact", "b.go", "5", "15", pb.FactKind_FACT_KIND_METHOD.String(), "Beta")]
 	if g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, from.GetId(), to.GetId(), "sym",
-		&pb.SourceAnchor{Path: "a.go", StartByte: 12, EndByte: 14, StartLine: 1, EndLine: 1}, nil) == nil {
+		&pb.SourceAnchor{Path: "a.go", StartByte: 12, EndByte: 14, StartLine: 1, EndLine: 1}) == nil {
 		t.Fatal("edge fact rejected")
 	}
 
@@ -67,6 +67,12 @@ func TestPublishRoundTripsThroughTheStore(t *testing.T) {
 	edges, err := st.EdgeFacts(ctx, "snap-1", pb.EdgeKind_EDGE_KIND_UNSPECIFIED, "", "", 0)
 	if err != nil || len(edges) != len(g.EdgeFacts) {
 		t.Fatalf("edges = %d (err %v), want %d", len(edges), err, len(g.EdgeFacts))
+	}
+
+	for _, edge := range edges {
+		if edge.Anchor != nil || edge.Evidence != nil {
+			t.Fatalf("persisted edge provenance: %+v", edge)
+		}
 	}
 
 	reloaded, err := st.LoadGraph(ctx, "snap-1")

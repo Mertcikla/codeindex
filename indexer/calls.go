@@ -50,6 +50,6 @@ func deriveCalls(g *graph.Graph, calls []callSite, table *symbols) {
 		if to != "" {
 			targetKey = ""
 		}
-		g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, owner.Id, to, targetKey, callAnchor, &pb.Evidence{Producer: "tree-sitter+scip", Version: selected.version, OriginalId: selected.key, Anchor: callAnchor, Derivation: "call expression with resolved reference"})
+		g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, owner.Id, to, targetKey, callAnchor)
 	}
 }

@@ -41,11 +41,10 @@ type factProjection struct {
 }
 
 type edgeProjection struct {
-	LogicalKey      string           `json:"logical_key"`
-	Kind            string           `json:"kind"`
-	TargetSymbolKey string           `json:"target_symbol_key"`
-	Anchor          anchorProjection `json:"anchor"`
-	Weight          float64          `json:"weight,omitempty"`
+	LogicalKey      string  `json:"logical_key"`
+	Kind            string  `json:"kind"`
+	TargetSymbolKey string  `json:"target_symbol_key"`
+	Weight          float64 `json:"weight,omitempty"`
 }
 
 type sourceProjection struct {
@@ -124,7 +123,6 @@ func Snapshot(snap *pb.Snapshot, facts []*pb.CodeFact, edges []*pb.EdgeFact) str
 			LogicalKey:      e.GetLogicalKey(),
 			Kind:            e.GetKind().String(),
 			TargetSymbolKey: e.GetTargetSymbolKey(),
-			Anchor:          projectAnchor(e.GetAnchor()),
 			Weight:          e.GetWeight(),
 		})
 	}
@@ -182,18 +180,17 @@ func factLess(a, b *factProjection) bool {
 	return a.BodyHash < b.BodyHash
 }
 
-// edgeLess orders edges the same way, since repeated observations of one
-// logical edge collapse onto a single entry but distinct edges can share a
-// logical key across anchors.
+// edgeLess orders relationships by their complete projected data. Distinct
+// observations remain separate entries, preserving their multiplicity.
 func edgeLess(a, b *edgeProjection) bool {
 	if a.LogicalKey != b.LogicalKey {
 		return a.LogicalKey < b.LogicalKey
 	}
-	if a.Anchor.StartByte != b.Anchor.StartByte {
-		return a.Anchor.StartByte < b.Anchor.StartByte
+	if a.Kind != b.Kind {
+		return a.Kind < b.Kind
 	}
-	if a.Anchor.EndByte != b.Anchor.EndByte {
-		return a.Anchor.EndByte < b.Anchor.EndByte
+	if a.TargetSymbolKey != b.TargetSymbolKey {
+		return a.TargetSymbolKey < b.TargetSymbolKey
 	}
-	return a.TargetSymbolKey < b.TargetSymbolKey
+	return a.Weight < b.Weight
 }

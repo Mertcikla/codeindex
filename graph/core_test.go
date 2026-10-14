@@ -14,7 +14,7 @@ func TestAdoptRekeysAcrossSnapshots(t *testing.T) {
 	child := base.AddFact(pb.FactKind_FACT_KIND_FUNCTION, "A", "go", src.Anchor(16, 25), "func A(){}", "func A()", &pb.Evidence{Producer: "tree-sitter"})
 	child.ParentFactId = parent.Id
 	child.SymbolKey = "sym-a"
-	edge := base.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, child.Id, parent.Id, "", src.Anchor(20, 21), &pb.Evidence{Producer: "scip"})
+	edge := base.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, child.Id, parent.Id, "", src.Anchor(20, 21))
 
 	next := NewGraph("repo", "snap-b")
 	adoptedParent := next.AdoptFact(parent)
@@ -30,8 +30,8 @@ func TestAdoptRekeysAcrossSnapshots(t *testing.T) {
 	if adoptedEdge == nil || adoptedEdge.FromFactId != adoptedChild.Id || adoptedEdge.ToFactId != adoptedParent.Id {
 		t.Fatalf("adopted edge %+v", adoptedEdge)
 	}
-	if adoptedEdge.LogicalKey == "" || len(adoptedEdge.Evidence) != 1 {
-		t.Fatalf("adopted edge lost identity/evidence: %+v", adoptedEdge)
+	if adoptedEdge.LogicalKey != edge.LogicalKey || adoptedEdge.Anchor != nil || len(adoptedEdge.Evidence) != 0 {
+		t.Fatalf("adopted edge lost identity or retained provenance: %+v", adoptedEdge)
 	}
 	if next.AdoptEdgeFact(edge, "", adoptedParent.Id, "") != nil {
 		t.Fatal("edge without a source must be dropped")

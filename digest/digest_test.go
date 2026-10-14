@@ -28,7 +28,6 @@ func edge(id, from, to string) *pb.EdgeFact {
 	return &pb.EdgeFact{
 		Id: id, Kind: pb.EdgeKind_EDGE_KIND_CALLS,
 		FromFactId: from, ToFactId: to, TargetSymbolKey: to,
-		Anchor:     &pb.SourceAnchor{Path: "a.go", StartByte: 1, EndByte: 5, StartLine: 1, EndLine: 1},
 		LogicalKey: graph.EdgeLogicalKey(pb.EdgeKind_EDGE_KIND_CALLS, from, to),
 	}
 }
@@ -102,7 +101,7 @@ func TestSnapshotCompactEdgeKeyGolden(t *testing.T) {
 	e.TargetSymbolKey = ""
 	e.LogicalKey = graph.EdgeLogicalKey(e.Kind, from.LogicalKey, to.LogicalKey)
 	got := Snapshot(snap(), []*pb.CodeFact{from, to}, []*pb.EdgeFact{e})
-	const want = "sha256:f996653c074bb9ae11d3c63b56152a2ff85827666babae91b3c5be07ebb5e8dd"
+	const want = "sha256:a988eb2e60858e2ca9d213f8e96b502e54abf7a99e991066fe09cdab31b1b182"
 	if got != want {
 		t.Fatalf("format-3 digest = %s, want %s", got, want)
 	}

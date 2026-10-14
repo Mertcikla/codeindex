@@ -62,35 +62,6 @@ func symbolKey(symbol, path string) string {
 	}
 	return symbol
 }
-
-func scipDocumentPath(project *pb.Project, relativePath string) string {
-	rel := filepath.ToSlash(filepath.Clean(relativePath))
-	if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
-		return ""
-	}
-	path := rel
-	if root := strings.Trim(project.Root, "/"); root != "" && root != "." {
-		path = root + "/" + rel
-	}
-	if isTestSource(path) {
-		return ""
-	}
-	return path
-}
-
-func scipPositionEncoding(d *scip.Document) (string, bool) {
-	switch d.GetPositionEncoding() {
-	case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
-		return "utf-8", true
-	case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
-		return "utf-16", true
-	case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
-		return "utf-32", true
-	default:
-		return "utf-8", false
-	}
-}
-
 func importSCIP(ctx context.Context, g *graph.Graph, project *pb.Project, artifact string, hashes map[string]string, strict, scipBacked bool, table *symbols) error {
 	file, err := os.Open(artifact)
 	if err != nil {
@@ -105,6 +76,7 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 	if !scipBacked {
 		definitions = graph.NewFactIndex(g.Facts)
 	}
+	projectRoot := strings.Trim(project.Root, "/")
 	visitor := &scip.IndexVisitor{}
 	visitor.VisitMetadata = func(_ context.Context, m *scip.Metadata) error {
 		if m.GetToolInfo() == nil {
@@ -114,8 +86,15 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 		return nil
 	}
 	visitor.VisitDocument = func(_ context.Context, d *scip.Document) error {
-		path := scipDocumentPath(project, d.GetRelativePath())
-		if path == "" {
+		rel := filepath.ToSlash(filepath.Clean(d.GetRelativePath()))
+		if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			return nil
+		}
+		path := rel
+		if projectRoot != "" && projectRoot != "." {
+			path = projectRoot + "/" + rel
+		}
+		if isTestSource(path) {
 			return nil
 		}
 		if table.skip != nil && table.skip[path] {
@@ -128,14 +107,24 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 			}
 			return nil
 		}
-		rel := filepath.ToSlash(filepath.Clean(d.GetRelativePath()))
 		if d.GetText() == "" && hashes[rel] != source.Hash {
 			return fmt.Errorf("SCIP document %s has no embedded text; supply a source-hash manifest", path)
 		}
 		if d.GetText() != "" && graph.Hash([]byte(d.GetText())) != source.Hash {
 			return fmt.Errorf("SCIP source mismatch: %s", path)
 		}
-		encoding, declaredEncoding := scipPositionEncoding(d)
+		encoding := "utf-8"
+		declaredEncoding := true
+		switch d.GetPositionEncoding() {
+		case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
+			encoding = "utf-8"
+		case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
+			encoding = "utf-16"
+		case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
+			encoding = "utf-32"
+		default:
+			declaredEncoding = false
+		}
 		var declarations *declarationIndex
 		if scipBacked {
 			declarations = newDeclarationIndex(source)
@@ -401,7 +390,7 @@ func (table *symbols) apply(g *graph.Graph) {
 		if owner == nil {
 			continue
 		}
-		g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_REFERENCES, owner.Id, to, "", ref.anchor, &pb.Evidence{Producer: "scip", Version: ref.version, OriginalId: ref.key, Anchor: ref.anchor})
+		g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_REFERENCES, owner.Id, to, "", ref.anchor)
 		if ref.scipBacked {
 			callable := false
 			if info := table.metadata[ref.key]; info != nil && scipCallableKind(info.GetKind()) {
@@ -413,7 +402,7 @@ func (table *symbols) apply(g *graph.Graph) {
 				callable = true
 			}
 			if callable {
-				g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, owner.Id, to, "", ref.anchor, &pb.Evidence{Producer: "scip", Version: ref.version, OriginalId: ref.key, Anchor: ref.anchor, Derivation: "reference to callable symbol"})
+				g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, owner.Id, to, "", ref.anchor)
 			}
 		}
 	}
@@ -431,7 +420,7 @@ func (table *symbols) apply(g *graph.Graph) {
 		if to == "" {
 			targetKey = relation.toKey
 		}
-		g.AddEdgeFact(relation.kind, from, to, targetKey, anchor, &pb.Evidence{Producer: "scip", Version: relation.version, OriginalId: relation.fromKey + " -> " + relation.toKey, Anchor: anchor, Derivation: "symbol relationship"})
+		g.AddEdgeFact(relation.kind, from, to, targetKey, anchor)
 	}
 	table.applyRustImpls(g)
 }
@@ -502,7 +491,7 @@ func (table *symbols) rustImplEdge(g *graph.Graph, refs []occurrence, impl *tsNo
 		// The trait lives in another crate; keep it as an external target.
 		targetKey = traitKey
 	}
-	g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_IMPLEMENTS, fromType, to, targetKey, fromFact.Anchor, &pb.Evidence{Producer: "scip", Derivation: "rust impl_item"})
+	g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_IMPLEMENTS, fromType, to, targetKey, fromFact.Anchor)
 }
 
 // rustSymbolInSpan returns the symbol of the largest SCIP occurrence fully

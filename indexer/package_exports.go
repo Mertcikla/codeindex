@@ -12,9 +12,9 @@ import (
 )
 
 // addPackageExports records public exposure as file references. Entry points
-// have separate logical identities; equivalent conditions share an edge and
-// retain their individual source witnesses. Recompute after file facts on every
-// build, since either the manifest or a target may have changed.
+// have separate logical identities; equivalent conditions share an edge.
+// Recompute after file facts on every build, since either the manifest or a
+// target may have changed.
 func addPackageExports(g *graph.Graph) {
 	files := map[string]*pb.CodeFact{}
 	for _, f := range g.Facts {
@@ -73,12 +73,12 @@ func addPackageExports(g *graph.Graph) {
 			}
 			entry := entries[name]
 			edges := map[string]*pb.EdgeFact{}
-			var visit func(*yaml.Node, []string)
-			visit = func(n *yaml.Node, conditions []string) {
+			var visit func(*yaml.Node)
+			visit = func(n *yaml.Node) {
 				switch n.Kind {
 				case yaml.MappingNode:
 					for i := 0; i+1 < len(n.Content); i += 2 {
-						visit(n.Content[i+1], append(append([]string(nil), conditions...), n.Content[i].Value))
+						visit(n.Content[i+1])
 					}
 				case yaml.SequenceNode:
 					// Fallback arrays depend on runtime resolution. Do not claim all
@@ -92,7 +92,7 @@ func addPackageExports(g *graph.Graph) {
 					if target == "" {
 						return
 					}
-					resolved, via := exportImplementationTarget(g, target)
+					resolved, _ := exportImplementationTarget(g, target)
 					to := files[resolved]
 					if to == nil || resolved == p {
 						return
@@ -114,32 +114,15 @@ func addPackageExports(g *graph.Graph) {
 						}
 					}
 					anchor := src.Anchor(start, end)
-					metadata, _ := json.Marshal(struct {
-						EntryPoint string   `json:"entryPoint"`
-						Conditions []string `json:"conditions"`
-						Target     string   `json:"target"`
-						SourceMap  string   `json:"sourceMap,omitempty"`
-					}{name, conditions, n.Value, via})
-					evidence := &pb.Evidence{Producer: "package-exports", Version: "1", OriginalId: string(metadata), Anchor: anchor, Derivation: "public package export"}
 					edge := edges[resolved]
 					if edge == nil {
-						edge = g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_REFERENCES, files[p].Id, to.Id, "", anchor, evidence)
+						edge = g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_REFERENCES, files[p].Id, to.Id, "", anchor)
 						edge.LogicalKey = g.LogicalEdgeKey(edge.Kind, files[p].Id, to.LogicalKey, "public-export", name)
 						edges[resolved] = edge
-					} else {
-						edge.Evidence = append(edge.Evidence, evidence)
-					}
-					if via != "" {
-						mapping := g.Sources[via]
-						edge.Evidence = append(edge.Evidence, &pb.Evidence{
-							Producer: "package-exports", Version: "1", OriginalId: string(metadata),
-							Anchor:     mapping.Anchor(0, len(mapping.Text)),
-							Derivation: "single-source source map resolves public export target",
-						})
 					}
 				}
 			}
-			visit(entry, nil)
+			visit(entry)
 		}
 	}
 }

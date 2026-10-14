@@ -499,7 +499,6 @@ func TestSCIPApplyInfersCallsWithoutSymbolKind(t *testing.T) {
 	table.references = []occurrence{{
 		key:        sym,
 		anchor:     &pb.SourceAnchor{Path: s.Path, StartByte: 13, EndByte: 19},
-		version:    "1",
 		scipBacked: true,
 	}}
 	table.apply(g)

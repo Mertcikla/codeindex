@@ -62,8 +62,10 @@ report for cross-run comparison.
 
 Index format 3 clears format-1/2 snapshot directories while retaining repository
 metadata and unrelated files. Reindex to populate the new edge keys. The
-standalone store continues to write complete JSON anchors and evidence; tld
-compacts these losslessly in its database-specific binary codec.
+standalone store retains JSON anchors and evidence on facts. Edges emit only
+relationship identity, endpoints, unresolved symbols and weights; observation
+sites are used internally for deduplication and are not persisted. tld stores
+the same relationship fields without an edge provenance column.
 
 Project artifacts are private import caches, not copies of the original SCIP
 output. `importProject` streams the original index into a filtered cache and

@@ -302,13 +302,14 @@ func DecodeEdgeLogicalKey(key string) ([]byte, error) {
 	return raw, nil
 }
 
-func (g *Graph) AddEdgeFact(kind pb.EdgeKind, from, to, targetKey string, anchor *pb.SourceAnchor, evidence *pb.Evidence) *pb.EdgeFact {
+// AddEdgeFact uses the observation site only to deduplicate observations.
+// Edges carry relationships; source anchors and provenance remain on facts.
+func (g *Graph) AddEdgeFact(kind pb.EdgeKind, from, to, targetKey string, anchor *pb.SourceAnchor) *pb.EdgeFact {
 	if anchor == nil || kind == pb.EdgeKind_EDGE_KIND_UNSPECIFIED {
 		return nil
 	}
 	id := ID(g.SnapshotID, "edge-fact", kind.String(), from, to, targetKey, anchor.Path, fmt.Sprint(anchor.StartByte), fmt.Sprint(anchor.EndByte))
 	if e := g.EdgeFacts[id]; e != nil {
-		e.Evidence = appendEvidence(e.Evidence, evidence)
 		return e
 	}
 	target := targetKey
@@ -317,8 +318,7 @@ func (g *Graph) AddEdgeFact(kind pb.EdgeKind, from, to, targetKey string, anchor
 			target = f.LogicalKey
 		}
 	}
-	e := &pb.EdgeFact{Id: id, RepositoryId: g.RepositoryID, SnapshotId: g.SnapshotID, Kind: kind, FromFactId: from, ToFactId: to, TargetSymbolKey: targetKey, Anchor: anchor, LogicalKey: g.LogicalEdgeKey(kind, from, target)}
-	e.Evidence = appendEvidence(e.Evidence, evidence)
+	e := &pb.EdgeFact{Id: id, RepositoryId: g.RepositoryID, SnapshotId: g.SnapshotID, Kind: kind, FromFactId: from, ToFactId: to, TargetSymbolKey: targetKey, LogicalKey: g.LogicalEdgeKey(kind, from, target)}
 	g.EdgeFacts[id] = e
 	return e
 }
@@ -385,10 +385,10 @@ func (g *Graph) AdoptFactAnchored(f *pb.CodeFact, anchor *pb.SourceAnchor, bodyH
 }
 
 // AdoptEdgeFact re-keys an EdgeFact from another snapshot into this graph with
-// already-remapped endpoints, carrying all evidence. It returns nil when the
-// relationship can no longer be represented because both endpoints are gone.
+// already-remapped endpoints, preserving identity and weight. It returns nil
+// when the source or both forms of target are gone.
 func (g *Graph) AdoptEdgeFact(e *pb.EdgeFact, from, to, targetKey string) *pb.EdgeFact {
-	if e == nil || e.Anchor == nil || e.Kind == pb.EdgeKind_EDGE_KIND_UNSPECIFIED {
+	if e == nil || e.Kind == pb.EdgeKind_EDGE_KIND_UNSPECIFIED {
 		return nil
 	}
 	if from == "" {
@@ -397,7 +397,8 @@ func (g *Graph) AdoptEdgeFact(e *pb.EdgeFact, from, to, targetKey string) *pb.Ed
 	if to == "" && targetKey == "" {
 		return nil
 	}
-	id := ID(g.SnapshotID, "edge-fact", e.Kind.String(), from, to, targetKey, e.Anchor.Path, fmt.Sprint(e.Anchor.StartByte), fmt.Sprint(e.Anchor.EndByte))
+	// The original row identity distinguishes observations without retaining their sites.
+	id := ID(g.SnapshotID, "adopted-edge-fact", e.Id, e.Kind.String(), from, to, targetKey)
 	if existing := g.EdgeFacts[id]; existing != nil {
 		return existing
 	}
@@ -407,13 +408,12 @@ func (g *Graph) AdoptEdgeFact(e *pb.EdgeFact, from, to, targetKey string) *pb.Ed
 			target = f.LogicalKey
 		}
 	}
-	n := &pb.EdgeFact{Id: id, RepositoryId: g.RepositoryID, SnapshotId: g.SnapshotID, Kind: e.Kind, FromFactId: from, ToFactId: to, TargetSymbolKey: targetKey, Anchor: e.Anchor, LogicalKey: g.LogicalEdgeKey(e.Kind, from, target)}
+	n := &pb.EdgeFact{Id: id, RepositoryId: g.RepositoryID, SnapshotId: g.SnapshotID, Kind: e.Kind, FromFactId: from, ToFactId: to, TargetSymbolKey: targetKey, LogicalKey: g.LogicalEdgeKey(e.Kind, from, target)}
 	// Adoption remaps entity IDs, not structural identity. Keep qualifiers too.
 	if e.LogicalKey != "" {
 		n.LogicalKey = e.LogicalKey
 	}
 	n.Weight = e.Weight
-	n.Evidence = append([]*pb.Evidence(nil), e.Evidence...)
 	g.EdgeFacts[id] = n
 	return n
 }

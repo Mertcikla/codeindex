@@ -55,7 +55,7 @@ func TestSCIPUTF16AndDirectEdgeFacts(t *testing.T) {
 		t.Fatalf("EdgeFacts: %d", len(g.EdgeFacts))
 	}
 	for _, e := range g.EdgeFacts {
-		if e.Anchor.StartByte != uint32(reference) || e.ToFactId == "" {
+		if e.Anchor != nil || len(e.Evidence) != 0 || e.ToFactId == "" {
 			t.Fatalf("reference: %+v", e)
 		}
 	}
@@ -96,8 +96,8 @@ func TestSCIPSymbolRelationships(t *testing.T) {
 	}
 	var internalImplementation, externalImplementation, typeDefinition bool
 	for _, edge := range g.EdgeFacts {
-		if len(edge.Evidence) != 1 || edge.Evidence[0].Producer != "scip" || edge.Evidence[0].Version != "1" {
-			t.Fatalf("missing SCIP evidence: %+v", edge)
+		if edge.Anchor != nil || len(edge.Evidence) != 0 {
+			t.Fatalf("edge retained provenance: %+v", edge)
 		}
 		switch {
 		case edge.Kind == pb.EdgeKind_EDGE_KIND_IMPLEMENTS && edge.FromFactId == table.definitions[dog] && edge.ToFactId == table.definitions[animal]:

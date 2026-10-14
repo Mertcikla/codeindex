@@ -150,6 +150,11 @@ func TestCallsUseReferenceSitesWithoutOccurrenceFacts(t *testing.T) {
 	if len(g.Facts) != 2 || len(g.EdgeFacts) != 4 {
 		t.Fatalf("facts=%d edgefacts=%d", len(g.Facts), len(g.EdgeFacts))
 	}
+	for _, e := range g.EdgeFacts {
+		if e.Anchor != nil || e.Evidence != nil {
+			t.Fatalf("edge emitted provenance: %+v", e)
+		}
+	}
 	calls := 0
 	for _, e := range g.EdgeFacts {
 		if e.Kind == pb.EdgeKind_EDGE_KIND_CALLS {

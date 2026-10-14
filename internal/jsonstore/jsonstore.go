@@ -423,21 +423,8 @@ func factLess(a, b *pb.CodeFact) bool {
 
 // edgeLess orders edges the same way.
 func edgeLess(a, b *pb.EdgeFact) bool {
-	ap, bp := a.GetAnchor().GetPath(), b.GetAnchor().GetPath()
-	if ap != bp {
-		return ap < bp
-	}
-	if a.GetKind() != b.GetKind() {
-		return a.GetKind() < b.GetKind()
-	}
-	if at, bt := a.GetTargetSymbolKey(), b.GetTargetSymbolKey(); at != bt {
-		return at < bt
-	}
-	if s, bs := a.GetAnchor().GetStartByte(), b.GetAnchor().GetStartByte(); s != bs {
-		return s < bs
-	}
-	if e, be := a.GetAnchor().GetEndByte(), b.GetAnchor().GetEndByte(); e != be {
-		return e < be
+	if a.GetLogicalKey() != b.GetLogicalKey() {
+		return a.GetLogicalKey() < b.GetLogicalKey()
 	}
 	return a.GetId() < b.GetId()
 }

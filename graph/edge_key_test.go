@@ -39,15 +39,23 @@ func TestEdgeKeySurvivesObservationAndAdoption(t *testing.T) {
 	g.Facts["a"] = &pb.CodeFact{LogicalKey: "fact|a"}
 	g.Facts["b"] = &pb.CodeFact{LogicalKey: "fact|b"}
 	a := &pb.SourceAnchor{Path: "a.go", StartByte: 1, EndByte: 2}
-	e := g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, "a", "b", "", a, nil)
-	other := g.AddEdgeFact(e.Kind, "a", "b", "", &pb.SourceAnchor{Path: "a.go", StartByte: 3, EndByte: 4}, nil)
+	e := g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_CALLS, "a", "b", "", a)
+	other := g.AddEdgeFact(e.Kind, "a", "b", "", &pb.SourceAnchor{Path: "a.go", StartByte: 3, EndByte: 4})
 	if e.Id == other.Id || e.LogicalKey != other.LogicalKey {
 		t.Fatal("observation site affected logical identity")
+	}
+	if len(g.EdgeFacts) != 2 || g.AddEdgeFact(e.Kind, "a", "b", "", a) != e {
+		t.Fatal("observation deduplication or multiplicity changed")
+	}
+	for _, edge := range g.EdgeFacts {
+		if edge.Anchor != nil || edge.Evidence != nil {
+			t.Fatal("edge emitted provenance")
+		}
 	}
 	next := NewGraph("repo", "next")
 	next.Facts["new-a"] = &pb.CodeFact{LogicalKey: "fact|a"}
 	next.Facts["new-b"] = &pb.CodeFact{LogicalKey: "fact|b"}
-	fresh := next.AddEdgeFact(e.Kind, "new-a", "new-b", "", a, nil)
+	fresh := next.AddEdgeFact(e.Kind, "new-a", "new-b", "", a)
 	if fresh.LogicalKey != e.LogicalKey {
 		t.Fatal("snapshot/entity IDs affected logical identity")
 	}
@@ -58,7 +66,11 @@ func TestEdgeKeySurvivesObservationAndAdoption(t *testing.T) {
 	if adopted.LogicalKey != e.LogicalKey || adopted.Weight != e.Weight {
 		t.Fatal("adoption lost qualified identity or weight")
 	}
-	external := next.AddEdgeFact(e.Kind, "new-a", "", "external.symbol", a, nil)
+	adoptedOther := next.AdoptEdgeFact(other, "new-a", "new-b", "")
+	if adoptedOther.Id == adopted.Id || next.AdoptEdgeFact(e, "new-a", "new-b", "") != adopted || len(next.EdgeFacts) != 2 {
+		t.Fatal("adoption collapsed distinct observations or duplicated a row")
+	}
+	external := next.AddEdgeFact(e.Kind, "new-a", "", "external.symbol", a)
 	if external.LogicalKey != EdgeLogicalKey(e.Kind, "fact|a", "external.symbol") {
 		t.Fatal("unresolved target identity changed")
 	}

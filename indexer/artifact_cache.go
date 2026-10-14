@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
@@ -130,4 +131,32 @@ func scipArtifactReader(data []byte) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("open SCIP artifact cache: %w", err)
 	}
 	return r, nil
+}
+
+func scipDocumentPath(project *pb.Project, relativePath string) string {
+	rel := filepath.ToSlash(filepath.Clean(relativePath))
+	if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return ""
+	}
+	path := rel
+	if root := strings.Trim(project.Root, "/"); root != "" && root != "." {
+		path = root + "/" + rel
+	}
+	if isTestSource(path) {
+		return ""
+	}
+	return path
+}
+
+func scipPositionEncoding(d *scip.Document) (string, bool) {
+	switch d.GetPositionEncoding() {
+	case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
+		return "utf-8", true
+	case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
+		return "utf-16", true
+	case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
+		return "utf-32", true
+	default:
+		return "utf-8", false
+	}
 }
