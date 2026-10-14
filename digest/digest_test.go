@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
+	"github.com/mertcikla/codeindex/graph"
 )
 
 func fact(id, path, name, hash string) *pb.CodeFact {
@@ -28,7 +29,7 @@ func edge(id, from, to string) *pb.EdgeFact {
 		Id: id, Kind: pb.EdgeKind_EDGE_KIND_CALLS,
 		FromFactId: from, ToFactId: to, TargetSymbolKey: to,
 		Anchor:     &pb.SourceAnchor{Path: "a.go", StartByte: 1, EndByte: 5, StartLine: 1, EndLine: 1},
-		LogicalKey: "edge|CALLS|" + from + "|" + to,
+		LogicalKey: graph.EdgeLogicalKey(pb.EdgeKind_EDGE_KIND_CALLS, from, to),
 	}
 }
 
@@ -92,5 +93,17 @@ func TestSnapshotIsStableAcrossRepeats(t *testing.T) {
 	}
 	if !strings.HasPrefix(first, "sha256:") {
 		t.Fatalf("digest %q is not a sha256", first)
+	}
+}
+
+func TestSnapshotCompactEdgeKeyGolden(t *testing.T) {
+	from, to := fact("f1", "a.go", "Alpha", "h1"), fact("f2", "b.go", "Beta", "h2")
+	e := edge("e1", from.Id, to.Id)
+	e.TargetSymbolKey = ""
+	e.LogicalKey = graph.EdgeLogicalKey(e.Kind, from.LogicalKey, to.LogicalKey)
+	got := Snapshot(snap(), []*pb.CodeFact{from, to}, []*pb.EdgeFact{e})
+	const want = "sha256:f996653c074bb9ae11d3c63b56152a2ff85827666babae91b3c5be07ebb5e8dd"
+	if got != want {
+		t.Fatalf("format-3 digest = %s, want %s", got, want)
 	}
 }

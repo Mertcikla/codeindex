@@ -51,10 +51,19 @@ it — tld implements it on bun/SQLite/Postgres — and the module ships
 Documents are canonically ordered (sorted slices, stable encoders), so the same
 content always produces the same bytes per snapshot. Published repository, snapshot, fact and edge IDs are allocated 64-bit integers
 represented as decimal strings. Extraction-local hashes are translated at publication;
-logical keys and content hashes remain unchanged. The JSON store records its index
+fact logical keys and content hashes remain unchanged. Edge logical keys are
+64-character lowercase SHA-256 digests of length-delimited kind, source logical
+key, target logical key (or unresolved symbol), and optional qualifier. Public
+export qualifiers are included before hashing; entity IDs and observation sites
+are excluded. The JSON store records its index
 format, silently clears legacy snapshots, and persists its sequence under a process
 lock that is released on exit. IDs differ between runs; use `digest` or the parity
 report for cross-run comparison.
+
+Index format 3 clears format-1/2 snapshot directories while retaining repository
+metadata and unrelated files. Reindex to populate the new edge keys. The
+standalone store continues to write complete JSON anchors and evidence; tld
+compacts these losslessly in its database-specific binary codec.
 
 ## Byte-parity goldens
 
@@ -70,6 +79,12 @@ These goldens were captured before the extraction from tld and are the
 regression gate for that migration: any drift in the pipeline shows up as a
 byte mismatch, not a silently different count. Goldens are toolchain-pinned —
 `scip-*` versions change what gets extracted.
+
+The historical `go-gin` and `ts-prisma` digests use readable edge keys and must
+be recaptured for format 3 from their original checkouts and pinned toolchains;
+their source revisions are not recorded in these files. Do not replace them
+with hashes from unrelated revisions. `TestSnapshotCompactEdgeKeyGolden` pins
+the new digest format with a deterministic fixture independent of external tools.
 
 Note: the `signature` and `documentation` fields are excluded from the digest.
 The tree-sitter and SCIP producers render both differently for facts they both

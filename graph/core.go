@@ -2,6 +2,7 @@ package graph
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
@@ -265,13 +266,40 @@ func LogicalInfraKey(kind pb.FactKind, subject, object, path string) string {
 
 // LogicalEdgeKey is the cross-snapshot identity of a relationship, ignoring the
 // observing anchor so repeated observations aggregate onto one logical edge.
-func (g *Graph) LogicalEdgeKey(kind pb.EdgeKind, from, target string) string {
+func (g *Graph) LogicalEdgeKey(kind pb.EdgeKind, from, target string, qualifiers ...string) string {
 	fromKey := ""
 	if f := g.Facts[from]; f != nil {
 		fromKey = f.LogicalKey
 	}
-	return strings.Join([]string{"edge", kind.String(), fromKey, target}, "|")
+	return EdgeLogicalKey(kind, fromKey, target, qualifiers...)
 }
+
+// EdgeLogicalKey hashes length-delimited structural identity components. Neither
+// entity IDs nor observation sites participate; qualifiers distinguish special
+// relationships such as public package exports without extending the key.
+func EdgeLogicalKey(kind pb.EdgeKind, fromKey, target string, qualifiers ...string) string {
+	h := sha256.New()
+	parts := append([]string{"edge", kind.String(), fromKey, target}, qualifiers...)
+	for _, part := range parts {
+		h.Write(binary.AppendUvarint(nil, uint64(len(part))))
+		h.Write([]byte(part))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// DecodeEdgeLogicalKey validates the canonical public representation and returns
+// its 32-byte digest for hosts that store graph keys in binary form.
+func DecodeEdgeLogicalKey(key string) ([]byte, error) {
+	if len(key) != 64 {
+		return nil, fmt.Errorf("edge logical key must be 64 lowercase hexadecimal characters")
+	}
+	raw, err := hex.DecodeString(key)
+	if err != nil || hex.EncodeToString(raw) != key {
+		return nil, fmt.Errorf("edge logical key must be 64 lowercase hexadecimal characters")
+	}
+	return raw, nil
+}
+
 func (g *Graph) AddEdgeFact(kind pb.EdgeKind, from, to, targetKey string, anchor *pb.SourceAnchor, evidence *pb.Evidence) *pb.EdgeFact {
 	if anchor == nil || kind == pb.EdgeKind_EDGE_KIND_UNSPECIFIED {
 		return nil
@@ -378,6 +406,11 @@ func (g *Graph) AdoptEdgeFact(e *pb.EdgeFact, from, to, targetKey string) *pb.Ed
 		}
 	}
 	n := &pb.EdgeFact{Id: id, RepositoryId: g.RepositoryID, SnapshotId: g.SnapshotID, Kind: e.Kind, FromFactId: from, ToFactId: to, TargetSymbolKey: targetKey, Anchor: e.Anchor, LogicalKey: g.LogicalEdgeKey(e.Kind, from, target)}
+	// Adoption remaps entity IDs, not structural identity. Keep qualifiers too.
+	if e.LogicalKey != "" {
+		n.LogicalKey = e.LogicalKey
+	}
+	n.Weight = e.Weight
 	n.Evidence = append([]*pb.Evidence(nil), e.Evidence...)
 	g.EdgeFacts[id] = n
 	return n

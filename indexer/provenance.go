@@ -18,7 +18,7 @@ import (
 
 // Bump when semantic import or relationship semantics change, independently
 // of syntax caches.
-const relationshipVersion = 4
+const relationshipVersion = 5
 
 // CaptureInputs fingerprints exactly the source/configuration inputs used by indexing.
 func CaptureInputs(ctx context.Context, root string, cfg config.Config, excludes []string) (fingerprint, revision, branch, provenance string, err error) {

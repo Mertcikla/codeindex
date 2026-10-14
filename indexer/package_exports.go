@@ -124,7 +124,7 @@ func addPackageExports(g *graph.Graph) {
 					edge := edges[resolved]
 					if edge == nil {
 						edge = g.AddEdgeFact(pb.EdgeKind_EDGE_KIND_REFERENCES, files[p].Id, to.Id, "", anchor, evidence)
-						edge.LogicalKey += "|public-export|" + name
+						edge.LogicalKey = g.LogicalEdgeKey(edge.Kind, files[p].Id, to.LogicalKey, "public-export", name)
 						edges[resolved] = edge
 					} else {
 						edge.Evidence = append(edge.Evidence, evidence)

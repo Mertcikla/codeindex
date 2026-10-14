@@ -9,7 +9,7 @@ import (
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 )
 
-const indexFormat = "2"
+const indexFormat = "3"
 
 // resetLegacyIndex runs under the output lock. Only recognized snapshot
 // directories are disposable; unrelated files and repository metadata stay put.
@@ -22,7 +22,7 @@ func resetLegacyIndex(dir string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err == nil && strings.TrimSpace(string(raw)) != "1" {
+	if err == nil && strings.TrimSpace(string(raw)) != "1" && strings.TrimSpace(string(raw)) != "2" {
 		return fmt.Errorf("jsonstore: unsupported index format %q", strings.TrimSpace(string(raw)))
 	}
 	paths, err := filepath.Glob(filepath.Join(dir, "*", "*", "snapshot.json"))
@@ -36,6 +36,16 @@ func resetLegacyIndex(dir string) error {
 		}
 		snapshotDir := filepath.Dir(path)
 		if snap.Id != "" && snap.Id == filepath.Base(snapshotDir) {
+			latestPath := filepath.Join(filepath.Dir(snapshotDir), "latest")
+			latest, err := os.ReadFile(latestPath)
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if strings.TrimSpace(string(latest)) == snap.Id {
+				if err := os.Remove(latestPath); err != nil {
+					return err
+				}
+			}
 			if err := os.RemoveAll(snapshotDir); err != nil {
 				return err
 			}
