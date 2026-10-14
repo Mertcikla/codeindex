@@ -186,6 +186,12 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 	}
 	for key, id := range table.definitions {
 		if fact := g.Facts[id]; fact != nil {
+			// Template instantiations can alias one physical declaration.
+			// Its metadata must come from the canonical alias selected by
+			// synthesizeFact, rather than whichever map entry runs last.
+			if scipBacked && key != symbolKey(fact.SymbolKey, fact.GetAnchor().GetPath()) {
+				continue
+			}
 			if info := table.metadata[key]; info != nil {
 				enrichFact(fact, info)
 			}
@@ -255,9 +261,8 @@ func synthesizeFact(g *graph.Graph, source *graph.Source, o *scip.Occurrence, sy
 		fact.SymbolKey = symbol
 		fact.QualifiedName = symbol
 		fact.LogicalKey = logicalKey
-		if docs := info.GetDocumentation(); len(docs) > 0 {
-			fact.Documentation = strings.Join(docs, "\n")
-		}
+		fact.Signature = signature
+		fact.Documentation = strings.Join(info.GetDocumentation(), "\n")
 	}
 	return fact
 }

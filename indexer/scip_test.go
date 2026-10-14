@@ -22,6 +22,35 @@ func marshalIndex(t *testing.T, idx *scip.Index) []byte {
 	return data
 }
 
+func TestSCIPAliasMetadataUsesCanonicalSymbol(t *testing.T) {
+	for _, order := range [][]int{{0, 1}, {1, 0}} {
+		for range 20 {
+			g, source := testSource(t, "a.cpp", "cpp", "map")
+			infos := []*scip.SymbolInformation{
+				{Symbol: "scip-clang . . . map(a).", DisplayName: "map", Kind: scip.SymbolInformation_Method, Documentation: []string{"canonical docs"}, SignatureDocumentation: &scip.Signature{Text: "canonical signature"}},
+				{Symbol: "scip-clang . . . map(b).", DisplayName: "map", Kind: scip.SymbolInformation_Method, Documentation: []string{"other docs"}, SignatureDocumentation: &scip.Signature{Text: "other signature"}},
+			}
+			doc := &scip.Document{RelativePath: source.Path, Text: string(source.Text)}
+			for _, i := range order {
+				doc.Symbols = append(doc.Symbols, infos[i])
+				doc.Occurrences = append(doc.Occurrences, &scip.Occurrence{Symbol: infos[i].Symbol, Range: []int32{0, 0, 3}, SymbolRoles: int32(scip.SymbolRole_Definition)})
+			}
+			idx := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: "test", Version: "1"}}, Documents: []*scip.Document{doc}}
+			if err := importSCIPReader(context.Background(), g, &pb.Project{}, bytes.NewReader(marshalIndex(t, idx)), nil, true, true, newSymbols()); err != nil {
+				t.Fatal(err)
+			}
+			if len(g.Facts) != 1 {
+				t.Fatalf("physical facts=%d", len(g.Facts))
+			}
+			for _, fact := range g.Facts {
+				if fact.SymbolKey != infos[0].Symbol || fact.Signature != "canonical signature" || fact.Documentation != "canonical docs" {
+					t.Fatalf("metadata came from a different alias: %+v", fact)
+				}
+			}
+		}
+	}
+}
+
 // position returns the zero-based line and character bounds of the nth
 // occurrence of needle in src. It assumes ASCII source, which keeps character
 // and byte columns aligned.

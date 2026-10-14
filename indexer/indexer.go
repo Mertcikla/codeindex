@@ -323,6 +323,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 		return nil, nil, false, e
 	}
 	addFileFacts(g)
+	addPackageExports(g)
 	doneInfra(int64(len(g.Facts)))
 	emitProgress(progress, Progress{Stage: "verify"})
 	doneVerify := p.measure("verify")

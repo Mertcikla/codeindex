@@ -46,6 +46,7 @@ func discover(ctx context.Context, root string, overrides, excludes []string, ba
 		return nil, nil, fmt.Errorf("%s is not a directory", root)
 	}
 	var projects []*pb.Project
+	var jvmSources []string
 	sources := map[string]*graph.Source{}
 	state := gitstate.State{}
 	isGit := false
@@ -103,11 +104,17 @@ func discover(ctx context.Context, root string, overrides, excludes []string, ba
 		if lang := projectLanguage(d.Name()); lang != "" {
 			projects = append(projects, &pb.Project{Root: filepath.ToSlash(filepath.Dir(rel)), Language: lang, ConfigPath: rel})
 		}
+		// Gradle can drive a native-only Android build. Its marker alone does
+		// not imply that there is any JVM code for scip-java to index. Collect
+		// paths in lightweight discovery too, without reading source contents.
+		if languageFamily(sourceLanguage(rel)) == familyJVM && projectLanguage(d.Name()) == "" {
+			jvmSources = append(jvmSources, rel)
+		}
 		if projectsOnly {
 			return nil
 		}
 		lang := sourceLanguage(rel)
-		if lang == "" && !parser.IsInfraSource(d.Name(), rel) {
+		if lang == "" && !parser.IsInfraSource(d.Name(), rel) && !isJavaScriptSourceMap(rel) {
 			return nil
 		}
 		if old := base[rel]; old != nil && isGit && old.InputBlob != "" && old.InputBlob == state.Blobs[rel] && !old.Dirty && !state.Dirty[rel] {
@@ -201,6 +208,18 @@ func discover(ctx context.Context, root string, overrides, excludes []string, ba
 	kept := projects[:0]
 	for _, p := range projects {
 		family := languageFamily(p.Language)
+		if family == familyJVM {
+			hasSource := false
+			for _, path := range jvmSources {
+				if p.Root == "." || strings.HasPrefix(path, p.Root+"/") {
+					hasSource = true
+					break
+				}
+			}
+			if !hasSource {
+				continue
+			}
+		}
 		if !workspaceFamilies[family] || !nestedRoot(p.Root, roots[family]) {
 			kept = append(kept, p)
 		}
@@ -276,6 +295,17 @@ func excluded(rel string, patterns []string) bool {
 			return true
 		}
 		if matched, _ := filepath.Match(p, rel); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// Capture source maps as immutable inputs; export resolution never reads
+// uncaptured files behind the snapshot fingerprint.
+func isJavaScriptSourceMap(p string) bool {
+	for _, suffix := range []string{".js.map", ".mjs.map", ".cjs.map", ".d.ts.map", ".d.mts.map", ".d.cts.map"} {
+		if strings.HasSuffix(p, suffix) {
 			return true
 		}
 	}

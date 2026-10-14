@@ -392,6 +392,52 @@ func TestDiscoverDotnetSolutionIndexesEachProject(t *testing.T) {
 	}
 }
 
+func TestDiscoverNativeGradleDoesNotRequireJVMIndexer(t *testing.T) {
+	root := t.TempDir()
+	for path, content := range map[string]string{
+		"CMakeLists.txt": "project(native)\n", "main.cpp": "int main() {}\n",
+		"support/build.gradle.kts": "android { externalNativeBuild { cmake {} } }\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, withJava := range []bool{false, true} {
+		if withJava {
+			if err := os.WriteFile(filepath.Join(root, "support", "Main.java"), []byte("class Main {}\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		full, _, err := Discover(context.Background(), root, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		light, err := DiscoverProjects(context.Background(), root, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, projects := range [][]*pb.Project{full, light} {
+			jvm := 0
+			for _, project := range projects {
+				if Family(project.Language) == familyJVM {
+					jvm++
+				}
+			}
+			want := 0
+			if withJava {
+				want = 1
+			}
+			if jvm != want {
+				t.Fatalf("withJava=%v: JVM projects=%d, want %d: %v", withJava, jvm, want, projects)
+			}
+		}
+	}
+}
+
 func TestSynthesizeJSTsConfig(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte("{}\n"), 0600); err != nil {

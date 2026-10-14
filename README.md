@@ -84,3 +84,21 @@ task parity -- /path/to/repo   # byte-compare against the goldens
 The module depends on the generated protobuf types at
 `buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go` — the same package
 tld uses, so fact types are shared across the module boundary.
+
+### Public package exports
+
+Indexing extracts `exports` from `package.json` and `jsr.json` as file reference
+edges with `package-exports` evidence. Each witness records the public subpath,
+condition chain, declared target and exact manifest span. Conditions that resolve
+to the same file share an edge within that entry point; distinct subpaths and
+conditional targets retain separate identities. Changed targets and entry points
+therefore participate in snapshot relationship diffs.
+
+Targets must be repository-relative captured JavaScript/TypeScript files. An
+explicit `sourceMappingURL` can resolve a captured build output to its source when
+the captured version-3 map identifies exactly one captured source. The map itself
+is retained as evidence. Without a map, a captured build output remains the exact
+export target; missing outputs are not guessed back to `src/`. Inline/remote or
+ambiguous maps, wildcard exports and fallback arrays are currently skipped.
+This does not run a build or fetch additional files. Relationship configuration
+versioning invalidates previously cached extraction on the next index.
