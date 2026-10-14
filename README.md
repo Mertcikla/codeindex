@@ -18,6 +18,7 @@ go run ./cmd/codeindex index --out /tmp/ci-out /path/to/repo
 | `cmd/codeindex` | thin CLI: index a path, write the JSON store, print/verify goldens |
 | `indexer` | the pipeline: discover, tree-sitter, scip, relationships, infra |
 | `graph` | the fact model: sources, facts, edges, logical keys, stable ids |
+| `symbols` | SCIP symbol normalization and snapshot package-version restoration |
 | `parser` | infra/config scanners (Dockerfile, compose, k8s, helm, terraform, openapi, proto) |
 | `tools` | external indexer toolchain resolution (`scip-go`, `scip-typescript`, …) |
 | `config` | configuration defaults plus `CODEINDEX_*` env overlay |
