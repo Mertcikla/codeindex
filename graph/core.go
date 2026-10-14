@@ -200,7 +200,9 @@ func Offset(b []byte, line, character int, encoding string) (int, error) {
 
 type ProjectArtifact struct {
 	Fingerprint string
-	Data        []byte
+	// Data is an opaque, versioned compressed import cache. Legacy caches may
+	// contain raw SCIP bytes; indexer owns filtering, encoding and replay.
+	Data []byte
 }
 
 type Graph struct {

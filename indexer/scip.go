@@ -62,6 +62,35 @@ func symbolKey(symbol, path string) string {
 	}
 	return symbol
 }
+
+func scipDocumentPath(project *pb.Project, relativePath string) string {
+	rel := filepath.ToSlash(filepath.Clean(relativePath))
+	if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return ""
+	}
+	path := rel
+	if root := strings.Trim(project.Root, "/"); root != "" && root != "." {
+		path = root + "/" + rel
+	}
+	if isTestSource(path) {
+		return ""
+	}
+	return path
+}
+
+func scipPositionEncoding(d *scip.Document) (string, bool) {
+	switch d.GetPositionEncoding() {
+	case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
+		return "utf-8", true
+	case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
+		return "utf-16", true
+	case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
+		return "utf-32", true
+	default:
+		return "utf-8", false
+	}
+}
+
 func importSCIP(ctx context.Context, g *graph.Graph, project *pb.Project, artifact string, hashes map[string]string, strict, scipBacked bool, table *symbols) error {
 	file, err := os.Open(artifact)
 	if err != nil {
@@ -76,7 +105,6 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 	if !scipBacked {
 		definitions = graph.NewFactIndex(g.Facts)
 	}
-	projectRoot := strings.Trim(project.Root, "/")
 	visitor := &scip.IndexVisitor{}
 	visitor.VisitMetadata = func(_ context.Context, m *scip.Metadata) error {
 		if m.GetToolInfo() == nil {
@@ -86,15 +114,8 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 		return nil
 	}
 	visitor.VisitDocument = func(_ context.Context, d *scip.Document) error {
-		rel := filepath.ToSlash(filepath.Clean(d.GetRelativePath()))
-		if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
-			return nil
-		}
-		path := rel
-		if projectRoot != "" && projectRoot != "." {
-			path = projectRoot + "/" + rel
-		}
-		if isTestSource(path) {
+		path := scipDocumentPath(project, d.GetRelativePath())
+		if path == "" {
 			return nil
 		}
 		if table.skip != nil && table.skip[path] {
@@ -107,24 +128,14 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 			}
 			return nil
 		}
+		rel := filepath.ToSlash(filepath.Clean(d.GetRelativePath()))
 		if d.GetText() == "" && hashes[rel] != source.Hash {
 			return fmt.Errorf("SCIP document %s has no embedded text; supply a source-hash manifest", path)
 		}
 		if d.GetText() != "" && graph.Hash([]byte(d.GetText())) != source.Hash {
 			return fmt.Errorf("SCIP source mismatch: %s", path)
 		}
-		encoding := "utf-8"
-		declaredEncoding := true
-		switch d.GetPositionEncoding() {
-		case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
-			encoding = "utf-8"
-		case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
-			encoding = "utf-16"
-		case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
-			encoding = "utf-32"
-		default:
-			declaredEncoding = false
-		}
+		encoding, declaredEncoding := scipPositionEncoding(d)
 		var declarations *declarationIndex
 		if scipBacked {
 			declarations = newDeclarationIndex(source)

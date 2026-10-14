@@ -496,11 +496,24 @@ func (p Pipeline) importProject(ctx context.Context, g *graph.Graph, snap *pb.Sn
 	pr := plan.project
 	snap.ToolVersions[plan.toolName] = plan.toolVersion
 	if plan.cached != nil {
-		hashes := projectHashes(pr, g.Sources)
-		if err := importSCIPReader(ctx, g, pr, bytes.NewReader(plan.cached.Data), hashes, false, plan.scipBacked, table); err != nil {
+		reader, err := scipArtifactReader(plan.cached.Data)
+		if err != nil {
 			return err
 		}
-		g.ProjectArtifacts[plan.projectKey] = *plan.cached
+		defer func() { _ = reader.Close() }()
+		hashes := projectHashes(pr, g.Sources)
+		if err := importSCIPReader(ctx, g, pr, reader, hashes, false, plan.scipBacked, table); err != nil {
+			return err
+		}
+		cached := *plan.cached
+		if !bytes.HasPrefix(cached.Data, []byte(scipArtifactMagic)) {
+			data, err := compactSCIPArtifact(ctx, g, pr, bytes.NewReader(cached.Data))
+			if err != nil {
+				return err
+			}
+			cached.Data = data
+		}
+		g.ProjectArtifacts[plan.projectKey] = cached
 		return nil
 	}
 	hashes := projectHashes(pr, g.Sources)
@@ -517,7 +530,12 @@ func (p Pipeline) importProject(ctx context.Context, g *graph.Graph, snap *pb.Sn
 	}
 	table.skip = nil
 	if !plan.strict {
-		data, err := os.ReadFile(plan.artifact)
+		file, err := os.Open(plan.artifact)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = file.Close() }()
+		data, err := compactSCIPArtifact(ctx, g, pr, file)
 		if err != nil {
 			return err
 		}

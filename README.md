@@ -65,6 +65,27 @@ metadata and unrelated files. Reindex to populate the new edge keys. The
 standalone store continues to write complete JSON anchors and evidence; tld
 compacts these losslessly in its database-specific binary codec.
 
+Project artifacts are private import caches, not copies of the original SCIP
+output. `importProject` streams the original index into a filtered cache and
+compresses it with zlib under a versioned `SCIP\0` header. It keeps only captured,
+non-test documents; non-local occurrences with valid ranges; and the symbol
+metadata, signatures and implementation/type-definition relationships used by
+the importer. Embedded source text, external symbols, diagnostics, hover
+overrides and unused fields are omitted. Caller-provided artifacts remain
+untouched. Cached and fresh imports produce the same facts and edges.
+
+Older raw caches remain readable and are compacted when replayed. Stores treat
+`ProjectArtifact.Data` as opaque bytes; no database or public API schema change
+is required. Existing content-addressed database rows are not rewritten by this
+producer change. If the importer needs additional fields in future, bump the
+cache format and relationship version to invalidate insufficient caches.
+
+The five artifacts captured from the tld database reduced from 66,271,827 to
+3,616,709 bytes (94.5%), with identical graph facts and edges on replay. Run
+`TestArtifactCacheRealData` with `CODEINDEX_ARTIFACT_FIXTURE` pointing to an
+isolated fixture directory to repeat the measurement; normal tests use tool-free
+fixtures and cover legacy caches, corruption and cross-project rebinding.
+
 ## Byte-parity goldens
 
 `testdata/parity/<repo>.json` holds a parity report plus a `digest` fingerprint
