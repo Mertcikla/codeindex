@@ -549,3 +549,33 @@ func TestSCIPDefinitionOrderDoesNotChangeBindings(t *testing.T) {
 		}
 	}
 }
+
+func TestSyntaxSCIPAliasMetadataUsesDeclarationSite(t *testing.T) {
+	for _, order := range [][]int{{0, 1}, {1, 0}} {
+		for range 20 {
+			text := "package p\ntype Article struct {\n Article string\n}\n"
+			g, src := testSource(t, "a.go", "go", text)
+			if _, err := syntaxFacts(context.Background(), g, src); err != nil {
+				t.Fatal(err)
+			}
+			infos := []*scip.SymbolInformation{
+				{Symbol: "scip-go gomod p v1 p/Article#", DisplayName: "Article", Documentation: []string{"declaration documentation"}},
+				{Symbol: "scip-go gomod p v1 p/Article#Article.", DisplayName: "Article", Documentation: []string{"field documentation"}},
+			}
+			doc := &scip.Document{RelativePath: "a.go", Text: text, Symbols: infos}
+			for _, i := range order {
+				line, start, end := position(t, src.Text, "Article", i)
+				doc.Occurrences = append(doc.Occurrences, &scip.Occurrence{Symbol: infos[i].Symbol, Range: []int32{int32(line), int32(start), int32(end)}, SymbolRoles: int32(scip.SymbolRole_Definition)})
+			}
+			index := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Version: "test"}}, Documents: []*scip.Document{doc}}
+			if err := importSCIPReader(context.Background(), g, &pb.Project{}, bytes.NewReader(marshalIndex(t, index)), nil, false, false, newSymbols()); err != nil {
+				t.Fatal(err)
+			}
+			for _, fact := range g.Facts {
+				if fact.Name == "Article" && (fact.Documentation != "declaration documentation" || fact.SymbolKey != infos[0].Symbol) {
+					t.Fatalf("metadata came from embedded field: %v", fact)
+				}
+			}
+		}
+	}
+}

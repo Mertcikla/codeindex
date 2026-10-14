@@ -9,7 +9,7 @@ import (
 	"github.com/mertcikla/codeindex/graph"
 )
 
-const syntaxCacheVersion = 5
+const syntaxCacheVersion = 6
 
 // syntaxCache is the per-source extraction cache. Version 4 stores one entry
 // per declaration keyed by structural identity and body/context hash so an

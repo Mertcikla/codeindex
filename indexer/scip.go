@@ -72,6 +72,7 @@ func importSCIP(ctx context.Context, g *graph.Graph, project *pb.Project, artifa
 }
 func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, r io.Reader, hashes map[string]string, strict, scipBacked bool, table *symbols) error {
 	var version string
+	canonicalSites := map[string]*pb.SourceAnchor{}
 	var definitions *graph.FactIndex
 	if !scipBacked {
 		definitions = graph.NewFactIndex(g.Facts)
@@ -168,12 +169,16 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 					}
 				} else if fact := definitions.NamedEnclosing(anchor, string(source.Text[anchor.StartByte:anchor.EndByte])); fact != nil {
 					table.define(key, fact.Id, anchor)
-					fact.SymbolKey = symbol
-					fact.QualifiedName = symbol
-					fact.Evidence = append(fact.Evidence, &pb.Evidence{Producer: "scip", Version: version, OriginalId: symbol, Anchor: anchor, Derivation: "matched declaration"})
-					if info := table.metadata[key]; info != nil {
-						enrichFact(fact, info)
+					// Several definition occurrences can fall inside one syntax
+					// declaration (an embedded field can share its type's name).
+					// Enrich from the earliest named site, independent of map order.
+					previous := canonicalSites[fact.Id]
+					if previous == nil || anchor.StartByte < previous.StartByte ||
+						(anchor.StartByte == previous.StartByte && symbol < fact.SymbolKey) {
+						canonicalSites[fact.Id] = anchor
+						fact.SymbolKey, fact.QualifiedName = symbol, symbol
 					}
+					fact.Evidence = append(fact.Evidence, &pb.Evidence{Producer: "scip", Version: version, OriginalId: symbol, Anchor: anchor, Derivation: "matched declaration"})
 				}
 				continue
 			}
@@ -189,7 +194,7 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 			// Template instantiations can alias one physical declaration.
 			// Its metadata must come from the canonical alias selected by
 			// synthesizeFact, rather than whichever map entry runs last.
-			if scipBacked && key != symbolKey(fact.SymbolKey, fact.GetAnchor().GetPath()) {
+			if key != symbolKey(fact.SymbolKey, fact.GetAnchor().GetPath()) {
 				continue
 			}
 			if info := table.metadata[key]; info != nil {
