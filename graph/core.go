@@ -324,7 +324,7 @@ func (g *Graph) AdoptFactAnchored(f *pb.CodeFact, anchor *pb.SourceAnchor, bodyH
 		return nil
 	}
 	id := f.Id
-	reused := id != "" && proto.Equal(f.Anchor, anchor) && f.BodyHash == bodyHash && f.Signature == signature
+	reused := id != "" && f.RepositoryId == g.RepositoryID && proto.Equal(f.Anchor, anchor) && f.BodyHash == bodyHash && f.Signature == signature
 	if !reused {
 		id = ID(g.SnapshotID, "fact", anchor.Path, fmt.Sprint(anchor.StartByte), fmt.Sprint(anchor.EndByte), f.Kind.String(), f.Name)
 	}

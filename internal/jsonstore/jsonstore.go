@@ -10,9 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/mertcikla/codeindex/identity"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -22,8 +25,9 @@ import (
 
 // Store is a store.Store backed by a directory of JSON files.
 type Store struct {
-	dir string
-	mu  sync.Mutex
+	dir  string
+	lock *os.File
+	mu   sync.Mutex
 }
 
 // Open creates (if needed) and returns a store rooted at dir.
@@ -34,28 +38,53 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("jsonstore: create %s: %w", dir, err)
 	}
-	return &Store{dir: dir}, nil
+	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(lock); err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("jsonstore: output is locked: %w", err)
+	}
+	if err := resetLegacyIndex(dir); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return &Store{dir: dir, lock: lock}, nil
 }
 
 // Close implements store.Store; file-backed storage holds no resources.
-func (s *Store) Close() error { return nil }
+func (s *Store) Close() error { return s.lock.Close() }
 
 // Publish writes the snapshot as the repository's latest.
 func (s *Store) Publish(ctx context.Context, root string, snap *pb.Snapshot, g *graph.Graph) error {
-	if err := s.write(ctx, snap, g); err != nil {
+	if err := s.write(ctx, root, snap, g); err != nil {
 		return err
 	}
 	return s.writeLatest(snap.GetRepositoryId(), snap.GetId())
 }
 
 // PublishHistorical writes the snapshot without advancing the latest pointer.
-func (s *Store) PublishHistorical(ctx context.Context, _ string, snap *pb.Snapshot, g *graph.Graph) error {
-	return s.write(ctx, snap, g)
+func (s *Store) PublishHistorical(ctx context.Context, root string, snap *pb.Snapshot, g *graph.Graph) error {
+	return s.write(ctx, root, snap, g)
 }
 
-func (s *Store) write(_ context.Context, snap *pb.Snapshot, g *graph.Graph) error {
+func (s *Store) write(ctx context.Context, root string, snap *pb.Snapshot, g *graph.Graph) error {
 	if snap == nil {
 		return fmt.Errorf("jsonstore: snapshot is required")
+	}
+	if g != nil && temporaryID(snap.Id) {
+		resolved, err := identity.Apply(ctx, s, root, "", "", false, uuid.Nil)
+		if err != nil {
+			return err
+		}
+		snap.RepositoryId = resolved.ID
+		normalizeReuse(g, snap.RepositoryId)
+		first, err := s.AllocateIDs(ctx, graphIDCount(g))
+		if err != nil {
+			return err
+		}
+		assignGraphIDs(snap, g, first)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,6 +154,9 @@ func (s *Store) writeLatest(repositoryID, snapshotID string) error {
 
 // Snapshot reads a snapshot by id.
 func (s *Store) Snapshot(_ context.Context, id string) (*pb.Snapshot, error) {
+	if temporaryID(id) {
+		return nil, fmt.Errorf("jsonstore: snapshot %s not found", id)
+	}
 	matches, err := filepath.Glob(filepath.Join(s.dir, "*", id, "snapshot.json"))
 	if err != nil {
 		return nil, fmt.Errorf("jsonstore: glob: %w", err)
@@ -150,7 +182,7 @@ func (s *Store) Snapshots(_ context.Context, repositoryID string) ([]*pb.Snapsho
 	}
 	var snaps []*pb.Snapshot
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || temporaryID(entry.Name()) {
 			continue
 		}
 		snap := &pb.Snapshot{}
@@ -226,6 +258,7 @@ func (s *Store) Facts(_ context.Context, snapshotID string, kind pb.FactKind, pa
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(facts, func(i, j int) bool { return idLess(facts[i].Id, facts[j].Id) })
 	var out []*pb.CodeFact
 	for _, f := range facts {
 		if kind != pb.FactKind_FACT_KIND_UNSPECIFIED && f.GetKind() != kind {
@@ -234,7 +267,7 @@ func (s *Store) Facts(_ context.Context, snapshotID string, kind pb.FactKind, pa
 		if pathPrefix != "" && !strings.HasPrefix(f.GetAnchor().GetPath(), pathPrefix) {
 			continue
 		}
-		if after != "" && f.GetId() <= after {
+		if after != "" && !idLess(after, f.GetId()) {
 			continue
 		}
 		out = append(out, f)
@@ -254,6 +287,7 @@ func (s *Store) EdgeFacts(_ context.Context, snapshotID string, kind pb.EdgeKind
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(edges, func(i, j int) bool { return idLess(edges[i].Id, edges[j].Id) })
 	var out []*pb.EdgeFact
 	for _, e := range edges {
 		if kind != pb.EdgeKind_EDGE_KIND_UNSPECIFIED && e.GetKind() != kind {
@@ -262,7 +296,7 @@ func (s *Store) EdgeFacts(_ context.Context, snapshotID string, kind pb.EdgeKind
 		if logicalKey != "" && e.GetLogicalKey() != logicalKey {
 			continue
 		}
-		if after != "" && e.GetId() <= after {
+		if after != "" && !idLess(after, e.GetId()) {
 			continue
 		}
 		out = append(out, e)
@@ -285,17 +319,18 @@ func (s *Store) RepositoryExists(_ context.Context, id string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-// RepositoryByRemoteKey always reports not found: the JSON store keeps no
-// remote registry, so identity resolution falls back to path-derived ids,
-// which is the standalone CLI's behavior.
-func (s *Store) RepositoryByRemoteKey(context.Context, string) (string, bool, error) {
-	return "", false, nil
+// RepositoryByRemoteKey resolves registered checkouts across standalone runs.
+func (s *Store) RepositoryByRemoteKey(ctx context.Context, key string) (string, bool, error) {
+	return s.findRepository(func(r repositoryDoc) bool { return key != "" && r.RemoteKey == key })
 }
-
-// EnsureRepositoryIdentity is a no-op: standalone snapshots are addressed by
-// path-derived repository ids and need no registry entry.
-func (s *Store) EnsureRepositoryIdentity(context.Context, string, string, string, string, bool) error {
-	return nil
+func (s *Store) EnsureRepositoryIdentity(_ context.Context, id, root, remoteURL, remoteKey string, managed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.dir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(dir, "repository.json"), repositoryDoc{ID: id, Root: root, RemoteURL: remoteURL, RemoteKey: remoteKey, Managed: managed})
 }
 
 func (s *Store) snapshotDir(snapshotID string) (string, error) {
@@ -428,4 +463,13 @@ func readJSON(path string, doc any) error {
 		return fmt.Errorf("jsonstore: decode %s: %w", path, err)
 	}
 	return nil
+}
+
+func idLess(a, b string) bool {
+	ai, ae := strconv.ParseInt(a, 10, 64)
+	bi, be := strconv.ParseInt(b, 10, 64)
+	if ae == nil && be == nil {
+		return ai < bi
+	}
+	return a < b
 }

@@ -12,6 +12,7 @@ package identity
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -62,6 +63,25 @@ func Resolve(ctx context.Context, idx store.Store, root, explicitID, remoteURL s
 		if exists {
 			return Resolved{ID: id, Root: root, RemoteURL: remoteURL, RemoteKey: key}, nil
 		}
+	}
+	// Integer allocation is an optional capability, preserving the existing
+	// host Store contract. Stores without it retain their original identities.
+	if allocator, ok := idx.(interface {
+		RepositoryByRoot(context.Context, string) (string, bool, error)
+		AllocateIDs(context.Context, int) (int64, error)
+	}); ok {
+		id, found, err := allocator.RepositoryByRoot(ctx, root)
+		if err != nil {
+			return Resolved{}, err
+		}
+		if !found {
+			first, err := allocator.AllocateIDs(ctx, 1)
+			if err != nil {
+				return Resolved{}, err
+			}
+			id = strconv.FormatInt(first, 10)
+		}
+		return Resolved{ID: id, Root: root, RemoteURL: remoteURL, RemoteKey: key}, nil
 	}
 	id := graph.RepositoryID(root)
 	if orgID != uuid.Nil {

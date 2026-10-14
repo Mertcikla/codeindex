@@ -49,8 +49,11 @@ it — tld implements it on bun/SQLite/Postgres — and the module ships
 ```
 
 Documents are canonically ordered (sorted slices, stable encoders), so the same
-content always produces the same bytes per snapshot. Snapshot, fact and edge ids
-embed build time and therefore differ between runs; use `digest` or the parity
+content always produces the same bytes per snapshot. Published repository, snapshot, fact and edge IDs are allocated 64-bit integers
+represented as decimal strings. Extraction-local hashes are translated at publication;
+logical keys and content hashes remain unchanged. The JSON store records its index
+format, silently clears legacy snapshots, and persists its sequence under a process
+lock that is released on exit. IDs differ between runs; use `digest` or the parity
 report for cross-run comparison.
 
 ## Byte-parity goldens

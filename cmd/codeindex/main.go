@@ -110,6 +110,7 @@ func run(args []string) error {
 		return fmt.Errorf("publish snapshot: %w", err)
 	}
 
+	repositoryID = snap.GetRepositoryId()
 	facts, edges, err := readBack(context.Background(), st, snap.GetId())
 	if err != nil {
 		return err

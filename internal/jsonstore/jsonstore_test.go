@@ -185,7 +185,7 @@ func buildGraphHistorical(t *testing.T) *pb.Snapshot {
 	return &pb.Snapshot{Id: "snap-0", RepositoryId: "repo", IngestionStatus: "complete", Provenance: "commit"}
 }
 
-func TestIdentityQueriesDegradeForStandaloneUse(t *testing.T) {
+func TestIdentityQueriesRetainStandaloneRegistrations(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(t.TempDir())
 	if err != nil {
@@ -198,7 +198,7 @@ func TestIdentityQueriesDegradeForStandaloneUse(t *testing.T) {
 		t.Fatalf("EnsureRepositoryIdentity: %v", err)
 	}
 	exists, err := st.RepositoryExists(ctx, "id")
-	if err != nil || exists {
+	if err != nil || !exists {
 		t.Fatalf("RepositoryExists = %v (err %v)", exists, err)
 	}
 }
