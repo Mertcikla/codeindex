@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"strings"
@@ -11,8 +10,6 @@ import (
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/graph"
 	scip "github.com/scip-code/scip/bindings/go/scip"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 // mergeGoArtifact replaces whole package documents while keeping the original
@@ -30,22 +27,11 @@ func mergeGoArtifact(ctx context.Context, cached []byte, artifact string, projec
 		return err
 	}
 	defer func() { _ = fresh.Close() }()
-	read := func(reader io.Reader) ([]*scip.Document, error) {
-		var docs []*scip.Document
-		visitor := &scip.IndexVisitor{VisitDocument: func(_ context.Context, doc *scip.Document) error {
-			if source := g.Sources[scipDocumentPath(project, doc.RelativePath)]; source != nil {
-				docs = append(docs, doc)
-			}
-			return ctx.Err()
-		}}
-		err := visitor.ParseStreaming(ctx, reader)
-		return docs, err
-	}
-	previous, err := read(old)
+	previous, err := readSCIPDocuments(ctx, g, project, old)
 	if err != nil {
 		return err
 	}
-	current, err := read(fresh)
+	current, err := readSCIPDocuments(ctx, g, project, fresh)
 	if err != nil {
 		return err
 	}
@@ -63,50 +49,9 @@ func mergeGoArtifact(ctx context.Context, cached []byte, artifact string, projec
 	if len(replacements) == 0 {
 		return fmt.Errorf("empty Go package index")
 	}
-	// A single module's own package version may change with HEAD/tag. Rebase
-	// its cached symbols, including references, while leaving dependencies alone.
-	moduleVersion := func(docs []*scip.Document) (string, string, error) {
-		key, version := "", ""
-		for _, doc := range docs {
-			for _, info := range doc.Symbols {
-				symbol, err := scip.ParseSymbol(info.Symbol)
-				if err != nil || symbol.Package == nil {
-					continue
-				}
-				v := symbol.Package.Version
-				symbol.Descriptors, symbol.Package.Version = nil, ""
-				k := scip.VerboseSymbolFormatter.FormatSymbol(symbol)
-				if key != "" && (key != k || version != v) {
-					return "", "", fmt.Errorf("ambiguous Go module version")
-				}
-				key, version = k, v
-			}
-		}
-		return key, version, nil
-	}
-	oldKey, oldVersion, err := moduleVersion(previous)
+	rewrite, err := projectVersionRewriter(previous, current, "")
 	if err != nil {
 		return err
-	}
-	newKey, newVersion, err := moduleVersion(current)
-	if err != nil || oldKey == "" || oldKey != newKey {
-		return fmt.Errorf("Go module identity changed")
-	}
-	rewrite := func(raw string) string {
-		if oldVersion == newVersion {
-			return raw
-		}
-		symbol, err := scip.ParseSymbol(raw)
-		if err != nil || symbol.Package == nil || symbol.Package.Version != oldVersion {
-			return raw
-		}
-		descriptors := symbol.Descriptors
-		symbol.Descriptors, symbol.Package.Version = nil, ""
-		if scip.VerboseSymbolFormatter.FormatSymbol(symbol) != oldKey {
-			return raw
-		}
-		symbol.Descriptors, symbol.Package.Version = descriptors, newVersion
-		return scip.VerboseSymbolFormatter.FormatSymbol(symbol)
 	}
 	// scip-go describes interface methods as terms when their syntax is loaded,
 	// but as methods when loaded from export data. Resolve those references to
@@ -175,37 +120,5 @@ func mergeGoArtifact(ctx context.Context, cached []byte, artifact string, projec
 	if len(replacements) != 0 {
 		return fmt.Errorf("Go package document membership changed")
 	}
-	output, err := os.Create(artifact + ".merged")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = output.Close(); _ = os.Remove(output.Name()) }()
-	write := func(field protowire.Number, message proto.Message) error {
-		data, err := proto.Marshal(message)
-		if err != nil {
-			return err
-		}
-		header := protowire.AppendTag(nil, field, protowire.BytesType)
-		header = protowire.AppendVarint(header, uint64(len(data)))
-		if _, err := output.Write(header); err != nil {
-			return err
-		}
-		_, err = output.Write(data)
-		return err
-	}
-	if err := write(1, &scip.Metadata{ToolInfo: &scip.ToolInfo{Version: "0.2.7"}}); err != nil {
-		return err
-	}
-	for _, doc := range previous {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := write(2, doc); err != nil {
-			return err
-		}
-	}
-	if err := output.Close(); err != nil {
-		return err
-	}
-	return os.Rename(output.Name(), artifact)
+	return writeSCIPDocuments(ctx, artifact, "0.2.7", previous)
 }

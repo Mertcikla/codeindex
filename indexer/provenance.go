@@ -19,7 +19,7 @@ import (
 
 // Bump when semantic import or relationship semantics change, independently
 // of syntax caches.
-const relationshipVersion = 7
+const relationshipVersion = 8
 
 // CaptureInputs fingerprints exactly the source/configuration inputs used by indexing.
 func CaptureInputs(ctx context.Context, root string, cfg config.Config, excludes []string) (fingerprint, revision, branch, provenance string, err error) {
@@ -35,8 +35,17 @@ func ConfigurationHash(cfg config.Config, req *pb.IndexRequest) string {
 		ExtractionVersion      int
 		RelationshipVersion    int
 		GoEnvironment          []string
-	}{cfg, req.Exclude, req.ProjectRoots, req.ScipArtifacts, syntaxCacheVersion, relationshipVersion, goEnvironment()})
+		PythonEnvironment      []string
+	}{cfg, req.Exclude, req.ProjectRoots, req.ScipArtifacts, syntaxCacheVersion, relationshipVersion, goEnvironment(), pythonEnvironment()})
 	return graph.Hash(raw)
+}
+
+func pythonEnvironment() []string {
+	var values []string
+	for _, key := range []string{"PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONNOUSERSITE", "VIRTUAL_ENV", "CONDA_PREFIX", "PYENV_VERSION"} {
+		values = append(values, key+"="+os.Getenv(key))
+	}
+	return values
 }
 
 // Build flags and the persistent `go env -w` file affect package selection and

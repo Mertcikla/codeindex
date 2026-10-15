@@ -437,7 +437,30 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 			previous = cached
 		}
 	}
+	pythonTarget := ""
+	if family == familyPython && plan.toolVersion == "0.6.6" && base != nil && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+			checkCtx, cancel := context.WithTimeout(ctx, p.Config.ToolTimeout())
+			pythonTarget = pythonChangedTarget(checkCtx, pr, snap, g, base, tmp)
+			cancel()
+			previous = cached
+		}
+	}
 	plan.run = func(context.Context) error {
+		if pythonTarget != "" {
+			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: "running scip-python · target " + pythonTarget})
+			_, targetErr := runTool(append(slices.Clone(argv), "--target-only", pythonTarget))
+			if targetErr == nil {
+				targetErr = mergePythonArtifact(ctx, previous.Data, plan.artifact, pr, g, pythonTarget, c.name)
+				if targetErr == nil {
+					return nil
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: fmt.Sprintf("target refresh unavailable (%v) · running full scip-python", targetErr)})
+		}
 		if len(packages) > 0 {
 			packageCtx, cancel := context.WithTimeout(ctx, p.Config.ToolTimeout())
 			defer cancel()
