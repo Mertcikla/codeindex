@@ -455,6 +455,24 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		}
 	}
 	plan.run = func(context.Context) error {
+		if family == familyPython && p.Semantics != nil && base != nil && plan.toolVersion == "0.6.6" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
+				refreshErr := p.Semantics.refreshPythonLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
+				stop()
+				if refreshErr == nil {
+					emitProgress(progress, Progress{Stage: "scip", Detail: "Python Pyright semantic refresh · " + pr.Root})
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				emitProgress(progress, Progress{Stage: "scip", Detail: fmt.Sprintf("Python Pyright refresh unavailable (%v) · using SCIP", refreshErr)})
+			}
+		}
+		if family == familyPython && p.Semantics != nil && base != nil {
+			defer p.Semantics.python.invalidate()
+		}
 		if family == familyRust && p.Semantics != nil && base != nil && plan.toolVersion == rustLSPVersion && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
 				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
@@ -513,7 +531,7 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: "running scip-python · target " + pythonTarget})
 			_, targetErr := runTool(append(slices.Clone(argv), "--target-only", pythonTarget))
 			if targetErr == nil {
-				targetErr = mergePythonArtifact(ctx, previous.Data, plan.artifact, pr, g, pythonTarget, c.name)
+				targetErr = mergePythonArtifact(ctx, previous.Data, plan.artifact, pr, g, pythonTarget)
 				if targetErr == nil {
 					return nil
 				}

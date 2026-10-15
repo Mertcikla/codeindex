@@ -148,6 +148,39 @@ func TestRustClientReadiness(t *testing.T) {
 	}
 }
 
+func TestPyrightClientDiagnostics(t *testing.T) {
+	if filepath.Separator == '\\' {
+		t.Skip("subprocess fixture requires POSIX shell")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEINDEX_LSP_HELPER", "1")
+	tool := filepath.Join(t.TempDir(), "fake-pyright")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nexec '"+strings.ReplaceAll(exe, "'", "'\\''")+"' -test.run=TestLSPProcess\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := StartPyright(ctx, tool, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if client.PyrightVersion() != "1.1.409" {
+		t.Fatalf("Pyright version=%q", client.PyrightVersion())
+	}
+	if err := client.CheckPythonDocument(ctx, "/valid.py"); err != nil {
+		t.Fatalf("valid document: %v", err)
+	}
+	for _, path := range []string{"/invalid.py", "/unknown.py"} {
+		if err := client.CheckPythonDocument(ctx, path); err == nil {
+			t.Fatalf("accepted unchecked/invalid %s", path)
+		}
+	}
+}
+
 func TestLSPProcess(t *testing.T) {
 	if os.Getenv("CODEINDEX_LSP_HELPER") != "1" {
 		return
@@ -174,6 +207,8 @@ func TestLSPProcess(t *testing.T) {
 		var result any
 		switch req.Method {
 		case "initialize":
+			log := `{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.409 starting"}}`
+			_, _ = fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n%s", len(log), log)
 			// Exercise server requests while a client request is pending.
 			request := `{"jsonrpc":"2.0","id":"config","method":"workspace/configuration","params":{"items":[{}]}}`
 			_, _ = fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n%s", len(request), request)
@@ -192,12 +227,16 @@ func TestLSPProcess(t *testing.T) {
 				} `json:"textDocument"`
 			}
 			_ = json.Unmarshal(req.Params, &params)
-			if strings.HasSuffix(params.TextDocument.URI, ".rs") {
+			if strings.HasSuffix(params.TextDocument.URI, ".rs") || strings.HasSuffix(params.TextDocument.URI, ".py") {
 				items := []map[string]any{}
-				if strings.HasSuffix(params.TextDocument.URI, "/invalid.rs") {
+				if strings.Contains(params.TextDocument.URI, "/invalid.") {
 					items = append(items, map[string]any{"severity": 1, "message": "type mismatch"})
 				}
-				result = map[string]any{"kind": "full", "items": items}
+				report := map[string]any{"kind": "full", "items": items}
+				if !strings.HasSuffix(params.TextDocument.URI, "/unknown.py") {
+					report["resultId"] = "checked"
+				}
+				result = report
 			}
 		case "echo":
 			result = req.Params

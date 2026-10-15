@@ -106,6 +106,23 @@ func TestRustToolsIncludeLanguageServerHealth(t *testing.T) {
 	}
 }
 
+func TestPythonToolsIncludePyrightHealth(t *testing.T) {
+	selected := ForFamilies([]string{"python"})
+	if len(selected) != 2 || selected[1].Name != "pyright-langserver" || !selected[1].LanguageServer {
+		t.Fatalf("Python tools: %+v", selected)
+	}
+	tool := filepath.Join(t.TempDir(), "pyright-langserver")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho 'pyright 1.1.409'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Tools.Pyright = tool
+	status := CheckTools(context.Background(), cfg, selected[1:])[0]
+	if status.Found || !strings.Contains(status.Error, "LSP health check:") {
+		t.Fatalf("accepted a version-only fake Pyright: %+v", status)
+	}
+}
+
 func TestTypeScriptToolsIncludeLanguageServerHealth(t *testing.T) {
 	selected := ForFamilies([]string{"web"})
 	if len(selected) != 2 || selected[1].Name != "typescript-language-server" || !selected[1].LanguageServer {

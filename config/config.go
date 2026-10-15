@@ -27,6 +27,7 @@ type Config struct {
 	} `yaml:"web"`
 	Tools struct {
 		Gopls                    string `yaml:"gopls" json:"Gopls,omitempty"`
+		Pyright                  string `yaml:"pyright" json:"Pyright,omitempty"`
 		TypeScriptLanguageServer string `yaml:"typescript_language_server" json:"TypeScriptLanguageServer,omitempty"`
 		SCIPGo                   string `yaml:"scip_go"`
 		SCIPTypeScript           string `yaml:"scip_typescript"`
@@ -54,6 +55,7 @@ func Default() Config {
 	c.Surreal.Password = "root"
 	c.Tools.SCIPGo = "scip-go"
 	c.Tools.Gopls = "gopls"
+	c.Tools.Pyright = "pyright-langserver"
 	c.Tools.TypeScriptLanguageServer = "typescript-language-server"
 	c.Tools.SCIPTypeScript = "scip-typescript"
 	c.Tools.SCIPPython = "scip-python"
@@ -89,6 +91,9 @@ func Load(path string) (Config, error) {
 // they take precedence over file and global settings. It is used by the CLI's
 // config bridge as well as Load.
 func (c *Config) ApplyEnv() {
+	if v, ok := os.LookupEnv("CODEINDEX_PYRIGHT"); ok {
+		c.Tools.Pyright = v
+	}
 	if v, ok := os.LookupEnv("CODEINDEX_TYPESCRIPT_LANGUAGE_SERVER"); ok {
 		c.Tools.TypeScriptLanguageServer = v
 	}

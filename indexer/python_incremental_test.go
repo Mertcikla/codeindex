@@ -95,7 +95,7 @@ func TestPythonTargetMergeBindingsAndVersions(t *testing.T) {
 			if err := os.WriteFile(artifact, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			err := mergePythonArtifact(ctx, cached, artifact, project, g, "worker.py", "fixture")
+			err := mergePythonArtifact(ctx, cached, artifact, project, g, "worker.py")
 			if (err != nil) != tc.fail {
 				t.Fatalf("merge err=%v want failure=%v", err, tc.fail)
 			}
@@ -272,7 +272,7 @@ func TestPythonTargetRejectsChangedImportedBindings(t *testing.T) {
 	if err := os.WriteFile(artifact, marshalIndex(t, index), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := mergePythonArtifact(ctx, cached, artifact, pr, g, "worker.py", "fixture"); err == nil || !strings.Contains(err.Error(), "untouched document caller.py") {
+	if err := mergePythonArtifact(ctx, cached, artifact, pr, g, "worker.py"); err == nil || !strings.Contains(err.Error(), "untouched document caller.py") {
 		t.Fatalf("imported binding drift accepted: %v", err)
 	}
 }

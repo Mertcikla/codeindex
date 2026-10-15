@@ -47,21 +47,22 @@ type message struct {
 // Client owns one process. Calls may run concurrently; notifications and requests
 // share a single ordered writer. The reader never waits on a request caller.
 type Client struct {
-	cmd         *exec.Cmd
-	in          io.WriteCloser
-	cancel      context.CancelFunc
-	writeMu     sync.Mutex
-	mu          sync.Mutex
-	next        int64
-	pending     map[string]chan message
-	err         error
-	done        chan struct{}
-	wait        chan struct{}
-	Encoding    string
-	opened      map[string]int
-	language    string
-	rustStatus  *rustStatus
-	rustChanged chan struct{}
+	cmd            *exec.Cmd
+	in             io.WriteCloser
+	cancel         context.CancelFunc
+	writeMu        sync.Mutex
+	mu             sync.Mutex
+	next           int64
+	pending        map[string]chan message
+	err            error
+	done           chan struct{}
+	wait           chan struct{}
+	Encoding       string
+	opened         map[string]int
+	language       string
+	rustStatus     *rustStatus
+	rustChanged    chan struct{}
+	pyrightVersion string
 }
 
 func URI(path string) string {
@@ -145,6 +146,9 @@ func start(ctx context.Context, executable string, args []string, root, language
 		caps := params["capabilities"].(map[string]any)
 		caps["experimental"] = map[string]any{"serverStatusNotification": true}
 		caps["textDocument"].(map[string]any)["diagnostic"] = map[string]any{}
+	}
+	if language == "python" {
+		params["capabilities"].(map[string]any)["textDocument"].(map[string]any)["diagnostic"] = map[string]any{}
 	}
 	if err := c.Call(initCtx, "initialize", params, &result); err != nil {
 		c.Close()
@@ -267,6 +271,18 @@ func (c *Client) read(r io.Reader) {
 			return
 		}
 		if m.Method != "" {
+			if m.Method == "window/logMessage" && c.language == "python" {
+				var log struct {
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(m.Params, &log) == nil {
+					if version, ok := strings.CutPrefix(log.Message, "Pyright language server "); ok && strings.HasSuffix(version, " starting") {
+						c.mu.Lock()
+						c.pyrightVersion = strings.TrimSuffix(version, " starting")
+						c.mu.Unlock()
+					}
+				}
+			}
 			if m.Method == "experimental/serverStatus" && c.language == "rust" {
 				var status rustStatus
 				if json.Unmarshal(m.Params, &status) == nil {

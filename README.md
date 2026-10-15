@@ -83,12 +83,13 @@ is required. Existing content-addressed database rows are not rewritten by this
 producer change. If the importer needs additional fields in future, bump the
 cache format and relationship version to invalidate insufficient caches.
 
-## Watch semantic layers (Go, TypeScript and Rust)
+## Watch semantic layers (Go, TypeScript, Rust and Python)
 
 Hosts can create `indexer.NewWatchSession(ctx, cfg, root)` before the initial
 SCIP build and attach it to `ingest.Engine.Semantics`. The session warms gopls,
-typescript-language-server and rust-analyzer in parallel, lives for the checkout's watch
-lifetime, and is used only for the working tree. Close it when watching stops.
+typescript-language-server, rust-analyzer and pyright-langserver in parallel,
+lives for the checkout's watch lifetime, and is used only for the working tree.
+Close it when watching stops.
 Historical checkouts always use SCIP; no editor overlay is shared with a
 historical build.
 
@@ -199,7 +200,48 @@ CODEINDEX_RUST_LSP_REPOS=/path/to/rust-repo:/path/to/another-repo \
 Real-tool fixtures cover aliases, methods, trait implementations, fields,
 closures, Unicode, external macro-generated methods, multiple files, reverts
 and fallbacks. Complete persisted fact/edge comparisons pass for one/two-file
-changes in imagesize 0.13.0 and unicode-vo 0.1.0. Python remains pending.
+changes in imagesize 0.13.0 and unicode-vo 0.1.0.
+
+The Python adapter uses Pyright 1.1.409 with scip-python 0.6.6 for annotated
+function/method body edits. It preserves declaration identities, docstrings and
+relationships from the reduced SCIP artifact. Pyright pull diagnostics must
+confirm the captured documents were analyzed before definition queries are
+accepted. Baseline definition locations supply exact canonical keys, including
+external targets. SCIP-Python's unused intrinsic builtin functions remain
+omitted; the adapter does not add edges just because Pyright can resolve them.
+
+Inferred APIs, changed docstrings, decorators/async functions, nested declarations,
+imports, local annotations, nonlocal/attribute/subscript writes, reflective/type
+factory calls, changed configuration/dependencies/stubs, file membership changes,
+unresolved or unseen targets and unsupported tool versions use SCIP. Git revision
+changes also use SCIP to refresh inferred package versions. Existing diagnostics
+in an edited file require SCIP, including unresolved optional dependencies.
+Each watch session selects the shallowest Python project configuration; other
+project roots use SCIP. Every edited function must have a captured SCIP
+definition, preventing newer Pyright syntax support from creating extra facts.
+
+Configure `tools.pyright` (tld: `index.tools.pyright`), `CODEINDEX_PYRIGHT`, or
+`TLD_INDEX_PYRIGHT` with the pyright-langserver executable. Install using
+`npm install -g pyright`. Doctor and the repository UI check initialization,
+the reported Pyright version and a real pull-diagnostic request on a temporary
+document. A version-only executable cannot pass health checks.
+
+```sh
+CODEINDEX_TEST_PYRIGHT=1 go test ./indexer -run TestPythonLSP -v
+CODEINDEX_PYRIGHT_REPOS=/path/to/python-repo:/path/to/another-repo \
+  go test ./indexer -run TestPythonLSPRepositoryParity -v
+```
+
+Exact persisted fact/edge comparisons pass for eligible two-file edits in Flask
+(06b1fcd) and itsdangerous (672971d), with their real configurations. Fixtures
+cover Unicode, aliases, methods, external calls, local bindings, builtin pruning,
+reverts, multiple files and fallbacks. tld also verifies immutable dirty snapshots
+and commit transitions against a fresh SCIP build.
+
+Extraction version 11 fixes scip-python's undeclared UTF-16 positions and stops
+overriding declared Python package names with temporary checkout basenames.
+Older baselines are recaptured. SCIP performs package-name inference from
+project metadata; unnamed projects retain SCIP's repository-local default.
 
 The five artifacts captured from the tld database reduced from 66,271,827 to
 3,616,709 bytes (94.5%), with identical graph facts and edges on replay. Run

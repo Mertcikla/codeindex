@@ -161,8 +161,8 @@ func scipPositionEncoding(d *scip.Document) (string, bool) {
 	}
 }
 
-// scip-typescript 0.4.0 uses TypeScript's UTF-16 positions but leaves the SCIP
-// position encoding unset. Byte-offset guessing can accept an incorrect range
+// scip-typescript 0.4.0 and scip-python 0.6.6 use UTF-16 positions but leave the
+// SCIP position encoding unset. Byte-offset guessing can accept an incorrect range
 // after a non-BMP character and bind a call to its argument instead of its
 // callee. Make this producer's encoding explicit before resolving any ranges.
 func scipSourceEncoding(d *scip.Document, source *graph.Source) (string, bool) {
@@ -170,6 +170,13 @@ func scipSourceEncoding(d *scip.Document, source *graph.Source) (string, bool) {
 	if !declared && source != nil && languageFamily(source.Language) == familyWeb {
 		for _, occurrence := range d.Occurrences {
 			if strings.HasPrefix(occurrence.Symbol, "scip-typescript ") {
+				return "utf-16", true
+			}
+		}
+	}
+	if !declared && source != nil && source.Language == "python" {
+		for _, occurrence := range d.Occurrences {
+			if strings.HasPrefix(occurrence.Symbol, "scip-python ") {
 				return "utf-16", true
 			}
 		}

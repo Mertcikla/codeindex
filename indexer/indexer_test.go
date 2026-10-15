@@ -62,8 +62,20 @@ func TestSCIPUTF16AndDirectEdgeFacts(t *testing.T) {
 }
 
 func TestSCIPTypeScriptImplicitUTF16(t *testing.T) {
+	testSCIPImplicitUTF16(t, "typescript")
+}
+
+func TestSCIPPythonImplicitUTF16(t *testing.T) { testSCIPImplicitUTF16(t, "python") }
+
+func testSCIPImplicitUTF16(t *testing.T, language string) {
+	t.Helper()
 	text := []byte("function target(){}\nfunction caller(){ void '😀'; target() }\n")
-	src := &graph.Source{Path: "a.ts", Language: "typescript", Text: text, Hash: graph.Hash(text)}
+	srcPath := "a.ts"
+	if language == "python" {
+		text = []byte("def target(): pass\ndef caller(): value='😀'; target()\n")
+		srcPath = "a.py"
+	}
+	src := &graph.Source{Path: srcPath, Language: language, Text: text, Hash: graph.Hash(text)}
 	g := graph.NewGraph("repo", "snapshot")
 	g.Sources[src.Path] = src
 	calls, err := treeFacts(context.Background(), g, src)
@@ -79,6 +91,9 @@ func TestSCIPTypeScriptImplicitUTF16(t *testing.T) {
 		return []int32{int32(line), int32(column), int32(column) + 6}
 	}
 	symbol := "scip-typescript npm fixture 1 `a.ts`/target()."
+	if language == "python" {
+		symbol = "scip-python python fixture 1 a/target()."
+	}
 	doc := &scip.Document{RelativePath: src.Path, Text: string(text), Occurrences: []*scip.Occurrence{{Range: rangeAt(def), Symbol: symbol, SymbolRoles: int32(scip.SymbolRole_Definition)}, {Range: rangeAt(ref), Symbol: symbol}}}
 	index := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: "scip-typescript", Version: "0.4.0"}}, Documents: []*scip.Document{doc}}
 	data, err := proto.Marshal(index)

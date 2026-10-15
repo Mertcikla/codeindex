@@ -53,6 +53,7 @@ func All() []Tool {
 		{Family: "web", Name: "scip-typescript", VersionArgs: []string{"--version"}, MinVersion: "0.4.0", InstallHint: "npm install -g @sourcegraph/scip-typescript", DownloadURL: "https://github.com/sourcegraph/scip-typescript/releases", path: func(c config.Config) string { return c.Tools.SCIPTypeScript }},
 		{Family: "web", Name: "typescript-language-server", VersionArgs: []string{"--version"}, LanguageServer: true, MinVersion: "5.1.3", InstallHint: "npm install -g typescript-language-server typescript", DownloadURL: "https://github.com/typescript-language-server/typescript-language-server", path: func(c config.Config) string { return c.Tools.TypeScriptLanguageServer }},
 		{Family: "python", Name: "scip-python", VersionArgs: []string{"--version"}, MinVersion: "0.6.6", InstallHint: "npm install -g @sourcegraph/scip-python", DownloadURL: "https://github.com/sourcegraph/scip-python/releases", path: func(c config.Config) string { return c.Tools.SCIPPython }},
+		{Family: "python", Name: "pyright-langserver", LanguageServer: true, MinVersion: "1.1.409", InstallHint: "npm install -g pyright", DownloadURL: "https://github.com/microsoft/pyright", path: func(c config.Config) string { return c.Tools.Pyright }},
 		{Family: "dotnet", Name: "scip-dotnet", VersionArgs: []string{"--version"}, MinVersion: "0.2.14", InstallHint: "dotnet tool install --global scip-dotnet", DownloadURL: "https://github.com/sourcegraph/scip-dotnet/releases", path: func(c config.Config) string { return c.Tools.SCIPDotnet }},
 		{Family: "clang", Name: "scip-clang", VersionArgs: []string{"--version"}, MinVersion: "0.4.0", InstallHint: "download a release from https://github.com/sourcegraph/scip-clang/releases", DownloadURL: "https://github.com/sourcegraph/scip-clang/releases", path: func(c config.Config) string { return c.Tools.SCIPClang }},
 		{Family: "jvm", Name: "scip-java", VersionArgs: []string{"--version"}, InstallHint: "cs install scip-java", DownloadURL: "https://github.com/sourcegraph/scip-java/releases", path: func(c config.Config) string { return c.Tools.SCIPJava }},
@@ -214,7 +215,9 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 	}
 	s.Path = path
 	s.Found = true
-	s.Version = probeVersion(ctx, path, t.VersionArgs)
+	if t.Name != "pyright-langserver" {
+		s.Version = probeVersion(ctx, path, t.VersionArgs)
+	}
 	if t.LanguageServer {
 		probe, stop := context.WithTimeout(ctx, versionTimeout)
 		defer stop()
@@ -222,7 +225,26 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 		if err == nil {
 			defer func() { _ = os.RemoveAll(root) }()
 			var client *lsp.Client
-			if t.Family == "rust" {
+			if t.Family == "python" {
+				client, err = lsp.StartPyright(probe, path, root)
+				if err == nil {
+					s.Version = client.PyrightVersion()
+					if s.Version == "" {
+						err = errors.New("language server did not report a Pyright version")
+					}
+					health := filepath.Join(root, "__codeindex_health__.py")
+					text := []byte("def health(value: int) -> int:\n    return value\n")
+					if err == nil {
+						err = os.WriteFile(health, text, 0600)
+					}
+					if err == nil {
+						err = client.Sync(health, text)
+					}
+					if err == nil {
+						err = client.CheckPythonDocument(probe, health)
+					}
+				}
+			} else if t.Family == "rust" {
 				client, err = lsp.StartRust(probe, path, root)
 			} else if t.Family == "web" {
 				client, err = lsp.StartTypeScript(probe, path, root, "")

@@ -109,7 +109,7 @@ except (SyntaxError, ValueError, TypeError):
 // scip-python changes its document root to --target-only and can emit imported
 // files outside that root. Normalize all paths, compact to the importer fields,
 // then reject context-sensitive changes rather than publishing a different graph.
-func mergePythonArtifact(ctx context.Context, cached []byte, artifact string, pr *pb.Project, g *graph.Graph, target, projectName string) error {
+func mergePythonArtifact(ctx context.Context, cached []byte, artifact string, pr *pb.Project, g *graph.Graph, target string) error {
 	file, err := os.Open(artifact)
 	if err != nil {
 		return err
@@ -161,7 +161,28 @@ func mergePythonArtifact(ctx context.Context, cached []byte, artifact string, pr
 	if err != nil {
 		return err
 	}
-	rewrite, err := projectVersionRewriter(previous, current, projectName)
+	definingPackages := func(docs []*scip.Document) []*scip.Document {
+		var out []*scip.Document
+		for _, doc := range docs {
+			defined := map[string]bool{}
+			for _, o := range doc.Occurrences {
+				if scip.SymbolRole_Definition.Matches(o) {
+					defined[o.Symbol] = true
+				}
+			}
+			filtered := &scip.Document{}
+			for _, info := range doc.Symbols {
+				if defined[info.Symbol] {
+					filtered.Symbols = append(filtered.Symbols, info)
+				}
+			}
+			out = append(out, filtered)
+		}
+		return out
+	}
+	// Package metadata comes from SCIP's declared project identity, independently
+	// of temporary checkout basenames. External documentation must not select it.
+	rewrite, err := projectVersionRewriter(definingPackages(previous), definingPackages(current), "")
 	if err != nil {
 		return err
 	}

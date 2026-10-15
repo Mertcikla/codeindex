@@ -217,7 +217,9 @@ func indexerForFamily(family string, cfg config.Config) (indexerSpec, error) {
 			versionArgs: []string{"--version"},
 			executable:  func(cfg config.Config, _ indexerContext) string { return cfg.Tools.SCIPPython },
 			args: func(_ config.Config, c indexerContext) ([]string, bool, error) {
-				return []string{"index", ".", "--project-name", c.name, "--output", c.artifact}, true, nil
+				// Let SCIP infer declared package metadata. A checkout-directory
+				// basename changes between historical staging and the live tree.
+				return []string{"index", ".", "--output", c.artifact}, true, nil
 			},
 		}, nil
 	case familyDotnet:
