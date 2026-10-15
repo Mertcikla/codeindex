@@ -11,21 +11,22 @@ import (
 	"github.com/mertcikla/codeindex/tools"
 )
 
-// WatchSession owns a warm language server for one checkout. It must only be
+// WatchSession owns warm semantic producers for one checkout. It must only be
 // attached to working-tree builds, never temporary historical checkouts. Start
-// it before the initial SCIP build so package loading happens in parallel.
+// it before the initial SCIP build so compiler/package loading happens in parallel.
 // Go, TypeScript, Rust and Python have separate sessions and parity gates. One unavailable
 // language server must not prevent the other from warming or refreshing.
 type WatchSession struct {
-	root   string
-	cfg    config.Config
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex // serializes batches and Close
-	ready  chan struct{}
-	client *lsp.Client
-	err    error
-	stale  bool
+	compiler *typeScriptCompiler
+	root     string
+	cfg      config.Config
+	ctx      context.Context
+	cancel   context.CancelFunc
+	mu       sync.Mutex // serializes batches and Close
+	ready    chan struct{}
+	client   *lsp.Client
+	err      error
+	stale    bool
 	// hashes describes all opened overlays, including unsuccessful batches.
 	// Synchronizing against the session rather than only the published base
 	// prevents a reverted edit from leaving stale content in the language server.
@@ -42,6 +43,7 @@ func NewWatchSession(ctx context.Context, cfg config.Config, root string) *Watch
 		abs, err = filepath.EvalSymlinks(abs)
 	}
 	s := &WatchSession{root: abs, cfg: cfg, ctx: life, cancel: cancel, ready: make(chan struct{}), hashes: map[string]string{}, err: err}
+	s.startTypeScriptCompiler()
 	s.web = newTypeScriptSession(life, cfg, abs)
 	s.rust = newRustSession(life, cfg, abs)
 	s.python = newPythonSession(life, cfg, abs)
@@ -86,6 +88,7 @@ func (s *WatchSession) Close() {
 		return
 	}
 	s.cancel()
+	s.compiler.close()
 	s.web.close()
 	s.rust.close()
 	s.python.close()

@@ -290,9 +290,15 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	doneTreeSitter := p.measure("tree-sitter")
 	var calls []callSite
 	var deferredSyntax []*graph.Source
-	patchCandidate := fast && p.Semantics != nil && len(projects) == 1 && languageFamily(projects[0].Language) == familyGo
+	patchCandidate := fast && p.Semantics != nil && len(projects) > 0
+	for _, project := range projects {
+		family := languageFamily(project.Language)
+		if family != familyGo && family != familyWeb {
+			patchCandidate = false
+		}
+	}
 	for _, src := range syntaxSources {
-		if languageFamily(src.Language) != familyGo {
+		if languageFamily(src.Language) != familyGo && languageFamily(src.Language) != familyWeb {
 			patchCandidate = false
 			break
 		}
@@ -344,12 +350,25 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	}
 	runPlans(ctx, plans, planErrs)
 	var patch *watchGraphPatch
-	if patchCandidate && planErrs[0] == nil && plans[0].goLSP {
+	patchReady := patchCandidate
+	for i, plan := range plans {
+		if planErrs[i] != nil || plan == nil || (plan.cached == nil && !plan.goLSP && plan.compiler == nil) {
+			patchReady = false
+		}
+	}
+	if patchReady {
 		patch = prepareWatchGraphPatch(base, g, kept)
 	}
 	if patch != nil {
 		patch.seed(g, table)
-		emitProgress(progress, Progress{Stage: "scip", Detail: "Go graph patch · retaining unchanged documents"})
+		detail := "Go graph patch · retaining unchanged documents"
+		for _, plan := range plans {
+			if plan.compiler != nil {
+				detail = "TypeScript graph patch · retaining unchanged documents"
+				break
+			}
+		}
+		emitProgress(progress, Progress{Stage: "scip", Detail: detail})
 	} else {
 		for _, src := range deferredSyntax {
 			sites, extractErr := syntaxFactsCached(ctx, g, src, p.SyntaxCache)
@@ -369,6 +388,11 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 			// record a warning and keep indexing siblings.
 			snap.Warnings = append(snap.Warnings, fmt.Sprintf("%s (%s): %v", pr.Root, languageFamily(pr.Language), err))
 			table.skip = nil
+			continue
+		}
+		if patch != nil && plans[i].cached != nil {
+			snap.ToolVersions[plans[i].toolName] = plans[i].toolVersion
+			g.ProjectArtifacts[plans[i].projectKey] = *plans[i].cached
 			continue
 		}
 		if err := p.importProject(ctx, g, snap, table, plans[i]); err != nil {
@@ -479,6 +503,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 // stay sequential so the graph and symbol tables mutate deterministically.
 type projectPlan struct {
 	goLSP       bool
+	compiler    *compilerRefresh
 	project     *pb.Project
 	scipBacked  bool
 	projectDir  string
@@ -616,8 +641,19 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		if family == familyRust && p.Semantics != nil && base != nil {
 			defer p.Semantics.rust.invalidate()
 		}
-		if family == familyWeb && p.Semantics != nil && base != nil && plan.toolVersion == "0.4.0" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+		// Historical checkouts can resolve installed dependencies differently.
+		// Establish a live SCIP baseline before reusing their web semantics.
+		if family == familyWeb && p.Semantics != nil && base != nil && base.Snapshot.Provenance != "commit" && plan.toolVersion == "0.4.0" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+				compilerCtx, compilerStop := context.WithTimeout(ctx, p.Config.ToolTimeout())
+				refreshed, compilerErr := p.Semantics.refreshTypeScriptCompiler(compilerCtx, root, pr, snap, g, base, cached)
+				compilerStop()
+				if compilerErr == nil {
+					plan.compiler = refreshed
+					emitProgress(progress, Progress{Stage: "scip", Detail: "TypeScript compiler semantic refresh · " + pr.Root})
+					return nil
+				}
+				emitProgress(progress, Progress{Stage: "scip", Detail: fmt.Sprintf("TypeScript compiler refresh unavailable (%v)", compilerErr)})
 				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
 				refreshErr := p.Semantics.refreshTypeScriptLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
 				stop()
@@ -632,7 +668,7 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 			}
 		}
 		if family == familyWeb && p.Semantics != nil && base != nil {
-			defer p.Semantics.web.invalidate()
+			defer func() { p.Semantics.web.invalidate(); p.Semantics.compiler.invalidate() }()
 		}
 		if family == familyGo && p.Semantics != nil && base != nil && plan.toolVersion == "0.2.7" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
@@ -751,6 +787,19 @@ func runPlans(ctx context.Context, plans []*projectPlan, errs []error) {
 func (p Pipeline) importProject(ctx context.Context, g *graph.Graph, snap *pb.Snapshot, table *symbols, plan *projectPlan) error {
 	pr := plan.project
 	snap.ToolVersions[plan.toolName] = plan.toolVersion
+	if plan.compiler != nil {
+		defer func() { table.skip = nil }()
+		if err := importSCIPDocuments(ctx, g, pr, plan.toolVersion, plan.compiler.documents, projectHashes(pr, g.Sources), plan.scipBacked, table); err != nil {
+			return err
+		}
+		data, err := cacheCompilerDocuments(ctx, plan.compiler.documents)
+		if err != nil {
+			return err
+		}
+		g.ProjectArtifacts[plan.projectKey] = graph.ProjectArtifact{Fingerprint: plan.fingerprint, Data: data}
+		p.Semantics.compiler.remember(plan.fingerprint, data, plan.compiler.documents)
+		return nil
+	}
 	if plan.cached != nil {
 		reader, err := scipArtifactReader(plan.cached.Data)
 		if err != nil {

@@ -75,6 +75,8 @@ func TestTypeScriptLSPSemanticParity(t *testing.T) {
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-qm", "base")
 	cfg := config.Default()
 	session := NewWatchSession(ctx, cfg, root)
+	session.compiler.close()
+	session.compiler = nil
 	defer session.Close()
 	pipeline := Pipeline{Config: cfg, Semantics: session}
 	req := &pb.IndexRequest{Directory: root}
@@ -82,6 +84,8 @@ func TestTypeScriptLSPSemanticParity(t *testing.T) {
 	if err != nil || len(snap.GetWarnings()) > 0 {
 		t.Fatalf("baseline: %v %v", err, snap.GetWarnings())
 	}
+	// This suite exercises the legacy LSP after a live baseline is established.
+	snap.Provenance = "working_tree"
 	base := baseFor(snap, g)
 	for _, tc := range []struct {
 		name, source string
@@ -139,6 +143,7 @@ func TestTypeScriptLSPSemanticParity(t *testing.T) {
 				t.Fatalf("tld graph differs: %d missing, %d extra", len(missing), len(extra))
 			}
 			if tc.fast {
+				current.Provenance = "working_tree"
 				base = baseFor(current, incremental)
 			}
 		})

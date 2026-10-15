@@ -12,7 +12,7 @@ import (
 	"github.com/mertcikla/codeindex/graph"
 )
 
-// Reuse discovery only for edits to already indexed Go files under an unchanged
+// Reuse discovery only for edits to already indexed Go or web files under an unchanged
 // complete inventory. Configuration, mode, membership, revision and other
 // language changes use normal discovery. The full inventory is verified again
 // after indexing, so newly arriving edits cannot be silently published as clean.
@@ -46,7 +46,7 @@ func (p Pipeline) watchDiscovery(ctx context.Context, root string, req *pb.Index
 			continue
 		}
 		src := base.Graph.Sources[file.Path]
-		if src == nil || src.Language != "go" || strings.HasSuffix(file.Path, "_test.go") {
+		if src == nil || (src.Language != "go" && languageFamily(src.Language) != familyWeb) || strings.HasSuffix(file.Path, "_test.go") {
 			return miss()
 		}
 	}

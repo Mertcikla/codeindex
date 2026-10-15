@@ -6,10 +6,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// A Go body refresh proves that declaration bindings outside edited documents
+// A guarded body refresh proves that declaration bindings outside edited documents
 // are unchanged. Carry their fully enriched facts and observations, remapping
 // incoming edges to the edited declarations' new immutable identities.
-// API/configuration/membership changes and failed LSP refreshes import normally.
+// API/configuration/membership changes and failed semantic refreshes import normally.
 type watchGraphPatch struct {
 	base  *graph.Graph
 	kept  map[string]bool

@@ -71,6 +71,25 @@ func importSCIP(ctx context.Context, g *graph.Graph, project *pb.Project, artifa
 	return importSCIPReader(ctx, g, project, file, hashes, strict, scipBacked, table)
 }
 func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, r io.Reader, hashes map[string]string, strict, scipBacked bool, table *symbols) error {
+	return importSCIPIndex(ctx, g, project, hashes, strict, scipBacked, table, func(v *scip.IndexVisitor) error { return v.ParseStreaming(ctx, r) })
+}
+func importSCIPDocuments(ctx context.Context, g *graph.Graph, project *pb.Project, version string, docs []*scip.Document, hashes map[string]string, scipBacked bool, table *symbols) error {
+	return importSCIPIndex(ctx, g, project, hashes, false, scipBacked, table, func(v *scip.IndexVisitor) error {
+		if err := v.VisitMetadata(ctx, &scip.Metadata{ToolInfo: &scip.ToolInfo{Version: version}}); err != nil {
+			return err
+		}
+		for _, d := range docs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := v.VisitDocument(ctx, d); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	})
+}
+func importSCIPIndex(ctx context.Context, g *graph.Graph, project *pb.Project, hashes map[string]string, strict, scipBacked bool, table *symbols, visit func(*scip.IndexVisitor) error) error {
 	var version string
 	canonicalSites := map[string]*pb.SourceAnchor{}
 	var definitions *graph.FactIndex
@@ -176,7 +195,7 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 		}
 		return nil
 	}
-	if err := visitor.ParseStreaming(ctx, r); err != nil {
+	if err := visit(visitor); err != nil {
 		return err
 	}
 	for key, id := range table.definitions {
