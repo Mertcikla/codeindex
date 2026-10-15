@@ -121,3 +121,44 @@ func TestVersionAtLeast(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeVersion(t *testing.T) {
+	const dockerWarning = "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested"
+	cases := []struct {
+		name, output, want string
+		fail               bool
+	}{
+		{name: "bare version", output: "0.4.0", want: "0.4.0"},
+		{name: "prefixed version", output: "v0.4.0", want: "v0.4.0"},
+		{name: "tool banner", output: "scip-go 0.2.7", want: "scip-go 0.2.7"},
+		{name: "version label", output: "Version: 0.2.14", want: "Version: 0.2.14"},
+		{name: "tool version label", output: "scip-clang version 0.4.0", want: "scip-clang version 0.4.0"},
+		{name: "prerelease", output: "scip-java version 0.0.0-SNAPSHOT", want: "scip-java version 0.0.0-SNAPSHOT"},
+		{name: "build metadata", output: "rust-analyzer 1.95.0 (59807616 2026-04-14)", want: "rust-analyzer 1.95.0 (59807616 2026-04-14)"},
+		{name: "docker warning", output: dockerWarning},
+		{name: "warning before version", output: dockerWarning + "\nscip-go 0.2.7", want: "scip-go 0.2.7"},
+		{name: "warning with version number", output: "WARNING: Docker 27.1.0 requires an update\n0.4.0", want: "0.4.0"},
+		{name: "help text", output: "Usage: scip-php [options]\n  --version Show version\n  --memory 512 Maximum memory"},
+		{name: "help with runtime version", output: "Usage: scip-php [options]\nRequires PHP 8.2.0 or later\nSee https://example.com/releases/1.2.3"},
+		{name: "warning and help", output: dockerWarning + "\nUsage: scip-php [options]"},
+		{name: "runtime version", output: "PHP 8.2.0 (cli)"},
+		{name: "failed probe", output: "scip-go 0.2.7", fail: true},
+		{name: "empty output"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exe := filepath.Join(t.TempDir(), "indexer")
+			// Emit diagnostics on stderr too, as Docker launchers do.
+			script := "#!/bin/sh\ncat >&2 <<'PROBE_OUTPUT'\n" + c.output + "\nPROBE_OUTPUT\n"
+			if c.fail {
+				script += "exit 1\n"
+			}
+			if err := os.WriteFile(exe, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if got := probeVersion(context.Background(), exe, []string{"--version"}); got != c.want {
+				t.Fatalf("probeVersion = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

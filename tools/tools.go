@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,10 @@ import (
 
 // versionTimeout bounds the version/help probe so doctor cannot hang.
 const versionTimeout = 5 * time.Second
+
+// Only accept version banners or bare versions. Probes may also print Docker
+// diagnostics, runtime messages, or usage text containing unrelated numbers.
+var versionLine = regexp.MustCompile(`(?i)^(?:(?:scip[-_][a-z]+|rust-analyzer)(?:\s+version)?[\s:]+|version[\s:]+)?v?[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[-+][0-9a-z.-]+)?(?:\s+.*)?$`)
 
 // Tool describes one external indexer binary.
 type Tool struct {
@@ -271,11 +276,14 @@ func probeVersion(ctx context.Context, path string, args []string) string {
 	defer cancel()
 	out, err := Run(probeCtx, path, args, "")
 	text := strings.TrimSpace(string(out))
-	if probeCtx.Err() != nil || strings.HasPrefix(text, truncatedOutput) || (text == "" && err != nil) {
+	if err != nil || probeCtx.Err() != nil || strings.HasPrefix(text, truncatedOutput) {
 		return ""
 	}
-	if line, _, found := strings.Cut(text, "\n"); found {
-		return strings.TrimSpace(line)
+	for line := range strings.SplitSeq(text, "\n") {
+		line = strings.TrimSpace(line)
+		if versionLine.MatchString(line) {
+			return line
+		}
 	}
-	return text
+	return ""
 }
