@@ -12,6 +12,7 @@ import (
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/gitstate"
 )
 
 // Exercise real cross-module references, requiring the LSP path rather than
@@ -84,6 +85,11 @@ func TestGoLSPModuleContextParity(t *testing.T) {
 					put("app/worker/worker.go", edit.text)
 					var details []string
 					started := time.Now()
+					state, captureErr := gitstate.CaptureQuick(ctx, root)
+					if captureErr != nil {
+						t.Fatal(captureErr)
+					}
+					pipeline.WatchState = &state
 					current, incremental, reused, err := pipeline.BuildIncremental(ctx, req, func(p Progress) { details = append(details, p.Detail) }, base)
 					elapsed := time.Since(started)
 					if err != nil || reused || len(current.GetWarnings()) > 0 || !strings.Contains(strings.Join(details, "\n"), "Go LSP semantic refresh") {

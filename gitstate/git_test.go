@@ -250,3 +250,32 @@ func TestCaptureFromSubdirectory(t *testing.T) {
 		t.Fatal("nested edits did not change signatures")
 	}
 }
+
+func TestCaptureQuickDetachedRenameAndConflict(t *testing.T) {
+	ctx := context.Background()
+	root := repo(t)
+	fixtureGit(t, root, "checkout", "--detach")
+	if err := os.Rename(filepath.Join(root, "a.go"), filepath.Join(root, "space \t newline\n.go")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, root, "add", ".")
+	state, err := CaptureQuick(ctx, root)
+	if err != nil || state.Branch != "" || state.StatusByPath["a.go"] != "D " || state.StatusByPath["space \t newline\n.go"] != "A " {
+		t.Fatalf("renamed detached state: %+v %v", state, err)
+	}
+	fixtureGit(t, root, "reset", "--hard", "HEAD")
+	fixtureGit(t, root, "checkout", "-b", "other")
+	put(t, root, "a.go", "package other\n")
+	fixtureGit(t, root, "add", ".")
+	fixtureGit(t, root, "commit", "-m", "other")
+	fixtureGit(t, root, "checkout", "main")
+	put(t, root, "a.go", "package main\n")
+	fixtureGit(t, root, "add", ".")
+	fixtureGit(t, root, "commit", "-m", "main")
+	if exec.Command("git", "-C", root, "merge", "other").Run() == nil {
+		t.Fatal("expected conflict")
+	}
+	if _, err := CaptureQuick(ctx, root); err == nil || !strings.Contains(err.Error(), "resolve merge conflicts") {
+		t.Fatalf("conflict: %v", err)
+	}
+}

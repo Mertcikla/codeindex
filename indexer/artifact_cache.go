@@ -117,6 +117,31 @@ func compactSCIPArtifact(ctx context.Context, g *graph.Graph, project *pb.Projec
 	return output.Bytes(), nil
 }
 
+// cacheRefreshedSCIP wraps our own reduced, validated LSP output directly.
+// Re-running compaction would decode, clone, re-anchor and encode every
+// unchanged document. Compression level affects bytes only, never semantics.
+func cacheRefreshedSCIP(ctx context.Context, raw io.Reader) ([]byte, error) {
+	var output bytes.Buffer
+	output.WriteString(scipArtifactMagic)
+	output.WriteByte(scipArtifactVersion)
+	compressed, err := zlib.NewWriterLevel(&output, zlib.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	_, copyErr := io.Copy(compressed, raw)
+	closeErr := compressed.Close()
+	if copyErr != nil {
+		return nil, copyErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
 // scipArtifactReader accepts older raw caches too. Caller-provided SCIP files
 // continue through importSCIP directly and always use the original wire format.
 func scipArtifactReader(data []byte) (io.ReadCloser, error) {

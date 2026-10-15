@@ -97,10 +97,18 @@ func commitSubject(ctx context.Context, root string) string {
 // carries hashes from an earlier pass; the returned cache can be threaded into
 // later passes so unchanged files are not re-read.
 func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req *pb.IndexRequest, projects []*pb.Project, sources map[string]*graph.Source, manifestCache gitstate.ManifestCache) (fingerprint, revision, branch, provenance string, digest map[string]string, manifests gitstate.ManifestCache, err error) {
+	return fingerprintCapturedInputs(ctx, root, cfg, req, projects, sources, manifestCache, nil, nil)
+}
+
+func fingerprintCapturedInputs(ctx context.Context, root string, cfg config.Config, req *pb.IndexRequest, projects []*pb.Project, sources map[string]*graph.Source, manifestCache gitstate.ManifestCache, captured *pb.SnapshotManifest, state *gitstate.QuickState) (fingerprint, revision, branch, provenance string, digest map[string]string, manifests gitstate.ManifestCache, err error) {
 	digest = map[string]string{}
 	parts := []string{ConfigurationHash(cfg, req)}
 	digest["config"] = parts[0]
-	manifest, manifests, manifestErr := gitstate.ManifestCached(ctx, root, manifestCache)
+	manifest, manifests := captured, manifestCache
+	var manifestErr error
+	if manifest == nil {
+		manifest, manifests, manifestErr = gitstate.ManifestCached(ctx, root, manifestCache)
+	}
 	if manifestErr != nil {
 		return "", "", "", "", nil, nil, manifestErr
 	}
@@ -158,11 +166,18 @@ func fingerprintInputs(ctx context.Context, root string, cfg config.Config, req 
 		raw, e := cmd.Output()
 		return strings.TrimSpace(string(raw)), e
 	}
-	revision, _ = git("rev-parse", "HEAD")
-	branch, _ = git("symbolic-ref", "--quiet", "--short", "HEAD")
 	provenance = "working_tree"
-	if status, e := git("status", "--porcelain", "--untracked-files=all"); e == nil && status == "" && revision != "" {
-		provenance = "commit"
+	if state != nil {
+		revision, branch = state.Revision, state.Branch
+		if len(state.Paths) == 0 {
+			provenance = "commit"
+		}
+	} else {
+		revision, _ = git("rev-parse", "HEAD")
+		branch, _ = git("symbolic-ref", "--quiet", "--short", "HEAD")
+		if status, e := git("status", "--porcelain", "--untracked-files=all"); e == nil && status == "" && revision != "" {
+			provenance = "commit"
+		}
 	}
 	parts = append(parts, revision)
 	digest["revision"] = revision

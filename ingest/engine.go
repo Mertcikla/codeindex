@@ -11,6 +11,7 @@ import (
 	"github.com/mertcikla/codeindex/gitstate"
 	"github.com/mertcikla/codeindex/graph"
 	"github.com/mertcikla/codeindex/indexer"
+	"github.com/mertcikla/codeindex/parser"
 	"github.com/mertcikla/codeindex/store"
 )
 
@@ -30,6 +31,20 @@ type Engine struct {
 	Manifests *gitstate.ManifestCache
 	// Semantics owns the watcher's language server for the live checkout.
 	Semantics *indexer.WatchSession
+	State     *gitstate.QuickState
+	// Cache belongs to one serialized watch loop. Persisted snapshot identity is
+	// checked before reuse, so another publisher or deletion invalidates it.
+	Cache *WatchCache
+}
+
+type WatchCache struct {
+	Base   *indexer.IncrementalBase
+	Infra  parser.ScanCache
+	Syntax indexer.SyntaxCache
+}
+
+type incrementalPublisher interface {
+	PublishIncremental(context.Context, string, *pb.Snapshot, *graph.Graph, *graph.Graph) error
 }
 
 func (e Engine) Base(ctx context.Context, id string) (*indexer.IncrementalBase, error) {
@@ -126,7 +141,7 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 		}
 		return nil
 	}
-	if !target.WorkingTree && branch == "" {
+	if !target.WorkingTree {
 		if snap := find(revision); snap != nil {
 			return snap, nil, true, nil
 		}
@@ -152,7 +167,11 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 	var base *indexer.IncrementalBase
 	for i := len(snapshots) - 1; i >= 0; i-- {
 		if snapshots[i].ConfigHash == configHash && indexer.CheckSnapshot(snapshots[i]) == nil {
-			base, err = e.Base(ctx, snapshots[i].Id)
+			if e.Cache != nil && e.Cache.Base != nil && e.Cache.Base.Snapshot.Id == snapshots[i].Id && e.Cache.Base.Graph.RepositoryID == e.RepositoryID {
+				base = e.Cache.Base
+			} else {
+				base, err = e.Base(ctx, snapshots[i].Id)
+			}
 			if err != nil {
 				return nil, nil, false, err
 			}
@@ -172,6 +191,11 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 		if target.WorkingTree {
 			pipeline.ManifestCache = e.Manifests
 			pipeline.Semantics = e.Semantics
+			pipeline.WatchState = e.State
+			if e.Cache != nil {
+				pipeline.InfraCache = &e.Cache.Infra
+				pipeline.SyntaxCache = &e.Cache.Syntax
+			}
 		}
 		input := &pb.IndexRequest{Directory: directory, Exclude: e.Exclude, Incremental: base != nil}
 		snap, g, reused, err := pipeline.BuildIncremental(ctx, input, e.Progress, base)
@@ -206,13 +230,24 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 		}
 		if !reused {
 			if target.WorkingTree {
-				err = e.Store.Publish(ctx, e.Root, snap, g)
+				if publisher, ok := e.Store.(incrementalPublisher); ok && base != nil {
+					err = publisher.PublishIncremental(ctx, e.Root, snap, g, base.Graph)
+				} else {
+					err = e.Store.Publish(ctx, e.Root, snap, g)
+				}
 			} else {
 				err = e.Store.PublishHistorical(ctx, e.Root, snap, g)
 			}
 			if err != nil {
 				return err
 			}
+		}
+		if target.WorkingTree && e.Cache != nil {
+			hashes := map[string]string{}
+			for path, src := range g.Sources {
+				hashes[path] = src.Hash
+			}
+			e.Cache.Base = &indexer.IncrementalBase{Snapshot: snap, Graph: g, Sources: hashes}
 		}
 		snapshot, preparedGraph, preparedReused = snap, g, reused
 		return nil

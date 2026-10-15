@@ -34,14 +34,42 @@ type declCacheEntry struct {
 	Fact        *pb.CodeFact
 }
 
+// SyntaxCache keeps decoded extraction payloads for one serialized watch loop.
+// The encoded payload remains authoritative, including publication ID rewrites.
+type SyntaxCache struct {
+	files map[string]decodedSyntax
+}
+type decodedSyntax struct {
+	raw   string
+	cache syntaxCache
+}
+
 // syntaxFacts extracts a source's declarations. A current cache is only ever
 // carried onto a source whose content hash is unchanged, so when it is present
 // the facts are adopted verbatim without parsing the file at all.
 // Otherwise the file is parsed once and only changed declarations are rebuilt.
 func syntaxFacts(ctx context.Context, g *graph.Graph, src *graph.Source) ([]callSite, error) {
+	return syntaxFactsCached(ctx, g, src, nil)
+}
+
+func syntaxFactsCached(ctx context.Context, g *graph.Graph, src *graph.Source, memory *SyntaxCache) ([]callSite, error) {
 	var cached syntaxCache
 	if src.SyntaxCache != "" {
-		_ = json.Unmarshal([]byte(src.SyntaxCache), &cached)
+		entry, ok := decodedSyntax{}, false
+		if memory != nil {
+			entry, ok = memory.files[src.Path]
+		}
+		if ok && entry.raw == src.SyntaxCache {
+			cached = entry.cache
+		} else {
+			_ = json.Unmarshal([]byte(src.SyntaxCache), &cached)
+			if memory != nil {
+				if memory.files == nil {
+					memory.files = map[string]decodedSyntax{}
+				}
+				memory.files[src.Path] = decodedSyntax{raw: src.SyntaxCache, cache: cached}
+			}
+		}
 	}
 	if cached.Version == syntaxCacheVersion && cached.FileHash == src.Hash && len(cached.Decls) > 0 && allCached(cached) {
 		return adoptCached(g, src, cached), nil

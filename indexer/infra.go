@@ -10,7 +10,11 @@ import (
 // addInfraFacts recomputes classifications across configuration sources so
 // changes to one manifest cannot leave stale facts in another file.
 func addInfraFacts(ctx context.Context, g *graph.Graph, root string) error {
-	scanned, err := parser.Scan(ctx, root, g.Sources)
+	return addCachedInfraFacts(ctx, g, root, nil)
+}
+
+func addCachedInfraFacts(ctx context.Context, g *graph.Graph, root string, cache *parser.ScanCache) error {
+	scanned, err := parser.ScanCached(ctx, root, g.Sources, cache)
 	if err != nil {
 		return err
 	}

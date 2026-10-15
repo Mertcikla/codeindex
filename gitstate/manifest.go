@@ -40,30 +40,30 @@ func Manifest(ctx context.Context, root string) (*pb.SnapshotManifest, error) {
 // ManifestCached is Manifest with hash reuse from an earlier pass. It returns
 // the cache to pass to the next call; only regular files participate.
 func ManifestCached(ctx context.Context, root string, cache ManifestCache) (*pb.SnapshotManifest, ManifestCache, error) {
-	if _, err := Run(ctx, root, "rev-parse", "--git-dir"); err != nil {
-		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+	return manifestCached(ctx, root, cache, false)
+}
+
+// ManifestCachedGit is used after capturing Git state for the same checkout.
+func ManifestCachedGit(ctx context.Context, root string, cache ManifestCache) (*pb.SnapshotManifest, ManifestCache, error) {
+	return manifestCached(ctx, root, cache, true)
+}
+
+func manifestCached(ctx context.Context, root string, cache ManifestCache, knownGit bool) (*pb.SnapshotManifest, ManifestCache, error) {
+	if !knownGit {
+		if _, err := Run(ctx, root, "rev-parse", "--git-dir"); err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return &pb.SnapshotManifest{Reason: "not a Git checkout"}, nil, nil
 		}
-		return &pb.SnapshotManifest{Reason: "not a Git checkout"}, nil, nil
 	}
 	raw, err := Run(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ".")
 	if err != nil {
 		return nil, nil, err
 	}
-	// Gitlinks may be uninitialized; in that case their immutable index
-	// identity is authoritative, never the parent checkout's HEAD.
-	staged, err := Run(ctx, root, "ls-files", "--stage", "-z")
-	if err != nil {
-		return nil, nil, err
-	}
-	gitlinks := map[string]string{}
-	for _, record := range strings.Split(staged, "\x00") {
-		metadata, path, ok := strings.Cut(record, "\t")
-		fields := strings.Fields(metadata)
-		if ok && len(fields) == 3 && fields[0] == "160000" {
-			gitlinks[path] = fields[1]
-		}
-	}
+	// Only directory entries need Git's stage identities. Ordinary worktrees
+	// avoid a second Git process without weakening submodule capture.
+	var gitlinks map[string]string
 	manifest := &pb.SnapshotManifest{Complete: true}
 	next := make(ManifestCache, len(cache))
 	seen := map[string]bool{}
@@ -115,6 +115,20 @@ func ManifestCached(ctx context.Context, root string, cache ManifestCache) (*pb.
 			}
 			next[path] = FileStamp{Size: info.Size(), MtimeNanos: stamp, Mode: entry.Mode, Hash: entry.Hash}
 		case info.IsDir():
+			if gitlinks == nil {
+				staged, stageErr := Run(ctx, root, "ls-files", "--stage", "-z")
+				if stageErr != nil {
+					return nil, nil, stageErr
+				}
+				gitlinks = map[string]string{}
+				for _, record := range strings.Split(staged, "\x00") {
+					metadata, path, ok := strings.Cut(record, "\t")
+					fields := strings.Fields(metadata)
+					if ok && len(fields) == 3 && fields[0] == "160000" {
+						gitlinks[path] = fields[1]
+					}
+				}
+			}
 			entry.Mode = "160000"
 			revision := gitlinks[path]
 			top, topErr := Run(ctx, absolute, "rev-parse", "--show-toplevel")

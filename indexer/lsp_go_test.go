@@ -18,6 +18,7 @@ import (
 
 	pb "buf.build/gen/go/tldiagramcom/diagram/protocolbuffers/go/codeindex/v1"
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/gitstate"
 	"github.com/mertcikla/codeindex/graph"
 )
 
@@ -108,12 +109,20 @@ func TestGoLSPSemanticParity(t *testing.T) {
 			put("worker/worker.go", tc.text)
 			var details []string
 			started := time.Now()
+			state, captureErr := gitstate.CaptureQuick(ctx, root)
+			if captureErr != nil {
+				t.Fatal(captureErr)
+			}
+			pipeline.WatchState = &state
 			current, incremental, reused, err := pipeline.BuildIncremental(ctx, req, func(p Progress) { details = append(details, p.Detail) }, base)
 			if err != nil || reused || len(current.GetWarnings()) > 0 {
 				t.Fatalf("incremental: %v reused=%v warnings=%v", err, reused, current.GetWarnings())
 			}
 			t.Logf("incremental %s", time.Since(started))
 			fast := strings.Contains(strings.Join(details, "\n"), "Go LSP semantic refresh")
+			if tc.fast && !strings.Contains(strings.Join(details, "\n"), "Go graph patch") {
+				t.Fatalf("did not exercise graph patch: %v", details)
+			}
 			if fast != tc.fast {
 				t.Fatalf("LSP=%v want %v:\n%s", fast, tc.fast, strings.Join(details, "\n"))
 			}
@@ -223,6 +232,11 @@ func TestGoLSPRepositoryParity(t *testing.T) {
 			}
 			started := time.Now()
 			var details []string
+			state, captureErr := gitstate.CaptureQuick(ctx, root)
+			if captureErr != nil {
+				t.Fatal(captureErr)
+			}
+			pipeline.WatchState = &state
 			current, incremental, _, err := pipeline.BuildIncremental(ctx, req, func(p Progress) { details = append(details, p.Detail) }, baseFor(snap, g))
 			elapsed := time.Since(started)
 			if err != nil || len(current.GetWarnings()) > 0 || !strings.Contains(strings.Join(details, "\n"), "Go LSP semantic refresh") {

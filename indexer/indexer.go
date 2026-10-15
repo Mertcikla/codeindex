@@ -21,6 +21,7 @@ import (
 	"github.com/mertcikla/codeindex/gitstate"
 	"github.com/mertcikla/codeindex/graph"
 	"github.com/mertcikla/codeindex/metrics"
+	"github.com/mertcikla/codeindex/parser"
 	"github.com/mertcikla/codeindex/tools"
 )
 
@@ -37,6 +38,9 @@ type Pipeline struct {
 	// a watcher's repeated scans only rehash files whose size, mtime, and mode
 	// moved. It is not safe for concurrent builds sharing the same pointer.
 	ManifestCache *gitstate.ManifestCache
+	SyntaxCache   *SyntaxCache
+	InfraCache    *parser.ScanCache
+	WatchState    *gitstate.QuickState
 }
 
 // measure starts a coarse stage timer, folding the stage's item count in when
@@ -124,6 +128,12 @@ func (p Pipeline) build(ctx context.Context, req *pb.IndexRequest, progress Prog
 		if err == nil {
 			return snap, g, reused, nil
 		}
+		if p.ManifestCache != nil {
+			*p.ManifestCache = nil
+		}
+		if p.InfraCache != nil {
+			p.InfraCache.Files = nil
+		}
 		var drift *inputDriftError
 		if !errors.As(err, &drift) {
 			return nil, nil, false, err
@@ -188,16 +198,28 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	if base != nil && base.Snapshot.ConfigHash == ConfigurationHash(p.Config, req) {
 		baseSources = base.Graph.Sources
 	}
-	projects, sources, err := discover(ctx, root, req.ProjectRoots, req.Exclude, baseSources, false)
-	if err != nil {
-		return nil, nil, false, err
-	}
 	manifestCache := gitstate.ManifestCache(nil)
 	if p.ManifestCache != nil {
 		manifestCache = *p.ManifestCache
 		defer func() { *p.ManifestCache = manifestCache }()
 	}
-	before, revision, branch, provenance, beforeInputs, manifestCache, err := fingerprintInputs(ctx, root, p.Config, req, projects, sources, manifestCache)
+	projects, sources, captured, nextCache, fast, err := p.watchDiscovery(ctx, root, req, base, manifestCache)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if fast {
+		manifestCache = nextCache
+	} else {
+		projects, sources, err = discover(ctx, root, req.ProjectRoots, req.Exclude, baseSources, false)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	var state *gitstate.QuickState
+	if fast {
+		state = p.WatchState
+	}
+	before, revision, branch, provenance, beforeInputs, manifestCache, err := fingerprintCapturedInputs(ctx, root, p.Config, req, projects, sources, manifestCache, captured, state)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -230,8 +252,16 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	snap.Provenance = provenance
 	snap.GitRevision = revision
 	snap.GitBranch = branch
-	snap.CommitMessage = commitSubject(ctx, root)
-	snap.Manifest, manifestCache, err = gitstate.ManifestCached(ctx, root, manifestCache)
+	if fast {
+		snap.CommitMessage = base.Snapshot.CommitMessage
+	} else {
+		snap.CommitMessage = commitSubject(ctx, root)
+	}
+	if fast {
+		snap.Manifest = captured
+	} else {
+		snap.Manifest, manifestCache, err = gitstate.ManifestCached(ctx, root, manifestCache)
+	}
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -241,6 +271,13 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 		snap.Sources = append(snap.Sources, &pb.SourceFile{Path: s.Path, Hash: s.Hash, Size: uint64(len(s.Text))})
 	}
 	sort.Slice(snap.Sources, func(i, j int) bool { return snap.Sources[i].Path < snap.Sources[j].Path })
+	if p.SyntaxCache != nil {
+		for path := range p.SyntaxCache.files {
+			if sources[path] == nil {
+				delete(p.SyntaxCache.files, path)
+			}
+		}
+	}
 	var syntaxSources []*graph.Source
 	for _, f := range snap.Sources {
 		src := sources[f.Path]
@@ -252,9 +289,21 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	emitProgress(progress, Progress{Stage: "tree-sitter", Total: int64(len(syntaxSources))})
 	doneTreeSitter := p.measure("tree-sitter")
 	var calls []callSite
+	var deferredSyntax []*graph.Source
+	patchCandidate := fast && p.Semantics != nil && len(projects) == 1 && languageFamily(projects[0].Language) == familyGo
+	for _, src := range syntaxSources {
+		if languageFamily(src.Language) != familyGo {
+			patchCandidate = false
+			break
+		}
+	}
 	for i, src := range syntaxSources {
 		emitProgress(progress, Progress{Stage: "tree-sitter", Current: int64(i), Total: int64(len(syntaxSources)), Detail: src.Path})
-		sites, err := syntaxFacts(ctx, g, src)
+		if patchCandidate && kept[src.Path] {
+			deferredSyntax = append(deferredSyntax, src)
+			continue
+		}
+		sites, err := syntaxFactsCached(ctx, g, src, p.SyntaxCache)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -294,6 +343,23 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 		plans[i], planErrs[i] = p.planProject(ctx, g, snap, req, pr, family, scipBacked, root, projectDir, projectKey, fingerprint, tmp, i, totalProjects, base, progress)
 	}
 	runPlans(ctx, plans, planErrs)
+	var patch *watchGraphPatch
+	if patchCandidate && planErrs[0] == nil && plans[0].goLSP {
+		patch = prepareWatchGraphPatch(base, g, kept)
+	}
+	if patch != nil {
+		patch.seed(g, table)
+		emitProgress(progress, Progress{Stage: "scip", Detail: "Go graph patch · retaining unchanged documents"})
+	} else {
+		for _, src := range deferredSyntax {
+			sites, extractErr := syntaxFactsCached(ctx, g, src, p.SyntaxCache)
+			if extractErr != nil {
+				return nil, nil, false, extractErr
+			}
+			calls = append(calls, sites...)
+		}
+	}
+
 	for i, pr := range projects {
 		if ctx.Err() != nil {
 			return nil, nil, false, ctx.Err()
@@ -320,10 +386,13 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	doneRelationships := p.measure("relationships")
 	table.apply(g)
 	deriveCalls(g, calls, table)
+	if patch != nil {
+		patch.carryEdges(g)
+	}
 	doneRelationships(int64(len(g.EdgeFacts)))
 	emitProgress(progress, Progress{Stage: "infra"})
 	doneInfra := p.measure("infra")
-	if e := addInfraFacts(ctx, g, root); e != nil {
+	if e := addCachedInfraFacts(ctx, g, root, p.InfraCache); e != nil {
 		return nil, nil, false, e
 	}
 	addFileFacts(g)
@@ -331,11 +400,66 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	doneInfra(int64(len(g.Facts)))
 	emitProgress(progress, Progress{Stage: "verify"})
 	doneVerify := p.measure("verify")
-	afterProjects, afterSources, err := discover(ctx, root, req.ProjectRoots, req.Exclude, sources, false)
-	if err != nil {
-		return nil, nil, false, err
+	var after string
+	var afterInputs map[string]string
+	afterSources := sources
+	if fast {
+		type captureResult struct {
+			state gitstate.QuickState
+			err   error
+		}
+		capturedState := make(chan captureResult, 1)
+		go func() {
+			state, err := gitstate.CaptureQuick(ctx, root)
+			capturedState <- captureResult{state, err}
+		}()
+		manifest, next, manifestErr := gitstate.ManifestCachedGit(ctx, root, manifestCache)
+		result := <-capturedState
+		if result.err != nil {
+			return nil, nil, false, result.err
+		}
+		if manifestErr != nil {
+			return nil, nil, false, manifestErr
+		}
+		freshState := result.state
+		// Reverts can disappear from Git status. Re-read previously dirty paths
+		// before trusting stamp-based hashes, including timestamp-preserving edits.
+		for _, path := range p.WatchState.Paths {
+			if freshState.Dirty[path] {
+				continue
+			}
+			raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+			if readErr != nil {
+				freshState.ContentHashes[path] = "deleted"
+			} else {
+				freshState.ContentHashes[path] = graph.Hash(raw)
+			}
+		}
+		// A changed manifest or revision is enough to reject this captured build.
+		// Re-discovery on the retry reconstructs changed membership/configuration.
+		after, _, _, _, afterInputs, _, err = fingerprintCapturedInputs(ctx, root, p.Config, req, projects, sources, next, manifest, &freshState)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		manifestHashes := map[string]string{}
+		for _, file := range manifest.Files {
+			manifestHashes[file.Path] = file.Hash
+		}
+		for path, hash := range freshState.ContentHashes {
+			src := sources[path]
+			if (src != nil && src.Hash != hash) || (manifestHashes[path] != hash && !(hash == "deleted" && manifestHashes[path] == "")) {
+				after = graph.ID(after, path, hash)
+				afterInputs["source:"+path] = hash
+			}
+		}
+	} else {
+		afterProjects, verifiedSources, captureErr := discover(ctx, root, req.ProjectRoots, req.Exclude, sources, false)
+		if captureErr != nil {
+			return nil, nil, false, captureErr
+		}
+		afterSources = verifiedSources
+		after, _, _, _, afterInputs, _, err = fingerprintInputs(ctx, root, p.Config, req, afterProjects, afterSources, manifestCache)
 	}
-	after, _, _, _, afterInputs, _, err := fingerprintInputs(ctx, root, p.Config, req, afterProjects, afterSources, manifestCache)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -354,6 +478,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 // cache reuse and resolves tools); tool execution runs in parallel; imports
 // stay sequential so the graph and symbol tables mutate deterministically.
 type projectPlan struct {
+	goLSP       bool
 	project     *pb.Project
 	scipBacked  bool
 	projectDir  string
@@ -515,6 +640,7 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 				refreshErr := p.Semantics.refreshGoLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
 				stop()
 				if refreshErr == nil {
+					plan.goLSP = true
 					emitProgress(progress, Progress{Stage: "scip", Detail: "Go LSP semantic refresh · " + pr.Root})
 					return nil
 				}
@@ -665,7 +791,12 @@ func (p Pipeline) importProject(ctx context.Context, g *graph.Graph, snap *pb.Sn
 			return err
 		}
 		defer func() { _ = file.Close() }()
-		data, err := compactSCIPArtifact(ctx, g, pr, file)
+		var data []byte
+		if plan.goLSP {
+			data, err = cacheRefreshedSCIP(ctx, file)
+		} else {
+			data, err = compactSCIPArtifact(ctx, g, pr, file)
+		}
 		if err != nil {
 			return err
 		}

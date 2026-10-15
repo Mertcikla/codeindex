@@ -143,3 +143,45 @@ func TestSyntaxCacheRebuildsLegacyLogicalKeys(t *testing.T) {
 		t.Fatal("legacy cache reused colliding logical keys")
 	}
 }
+
+func TestDecodedSyntaxCacheKeepsPayloadImmutable(t *testing.T) {
+	ctx := context.Background()
+	text := []byte("package a\nfunc A() { B() }\nfunc B() {}\n")
+	src := &graph.Source{Path: "a.go", Language: "go", Text: text, Hash: graph.Hash(text)}
+	if _, err := syntaxFacts(ctx, graph.NewGraph("repo", "seed"), src); err != nil {
+		t.Fatal(err)
+	}
+	var memory SyntaxCache
+	for attempt := 0; attempt < 3; attempt++ {
+		next := &graph.Source{Path: src.Path, Language: src.Language, Text: text, Hash: src.Hash, SyntaxCache: src.SyntaxCache}
+		g := graph.NewGraph("repo", "current")
+		if _, err := syntaxFactsCached(ctx, g, next, &memory); err != nil {
+			t.Fatal(err)
+		}
+		fresh := graph.NewGraph("repo", "current")
+		if _, err := syntaxFacts(ctx, fresh, next); err != nil {
+			t.Fatal(err)
+		}
+		a, _ := json.Marshal(g.Facts)
+		b, _ := json.Marshal(fresh.Facts)
+		if string(a) != string(b) {
+			t.Fatal("decoded cache differs from persisted cache")
+		}
+		for _, fact := range g.Facts {
+			fact.SymbolKey = "later semantic enrichment"
+			fact.ParentFactId = "later publication"
+		}
+	}
+	// Publication rewriting the encoded IDs must invalidate decoded entries.
+	cache := decodeCache(t, src.SyntaxCache)
+	cache.Decls[0].Fact.Id = "123"
+	raw, _ := json.Marshal(cache)
+	src.SyntaxCache = string(raw)
+	g := graph.NewGraph("repo", "current")
+	if _, err := syntaxFactsCached(ctx, g, src, &memory); err != nil {
+		t.Fatal(err)
+	}
+	if g.Facts["123"] == nil {
+		t.Fatal("publication ID rewrite was not adopted")
+	}
+}

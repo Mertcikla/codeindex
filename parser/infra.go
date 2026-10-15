@@ -41,6 +41,21 @@ var SkipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": tru
 // discovered sources as input keeps the scan aligned with discovery (the same
 // excludes, overrides, and ignore rules apply) and avoids a second walk.
 func Scan(ctx context.Context, root string, sources map[string]*graph.Source) ([]Fact, error) {
+	return ScanCached(ctx, root, sources, nil)
+}
+
+// ScanCache is owned by one watch loop. Cross-file bridge facts and Helm
+// rendering are still recomputed; only unchanged per-file scans are reused.
+type ScanCache struct {
+	Root  string
+	Files map[string]CachedScan
+}
+type CachedScan struct {
+	Hash  string
+	Facts []Fact
+}
+
+func ScanCached(ctx context.Context, root string, sources map[string]*graph.Source, cache *ScanCache) ([]Fact, error) {
 	rels := make([]string, 0, len(sources))
 	for rel := range sources {
 		rels = append(rels, rel)
@@ -48,6 +63,7 @@ func Scan(ctx context.Context, root string, sources map[string]*graph.Source) ([
 	sort.Strings(rels)
 	var out []Fact
 	var charts []string
+	next := map[string]CachedScan{}
 	for _, rel := range rels {
 		if e := ctx.Err(); e != nil {
 			return nil, e
@@ -58,18 +74,30 @@ func Scan(ctx context.Context, root string, sources map[string]*graph.Source) ([
 			charts = append(charts, filepath.Dir(path))
 		}
 		ext := filepath.Ext(rel)
+		if cache != nil && cache.Root == root {
+			if entry, ok := cache.Files[rel]; ok && entry.Hash == sources[rel].Hash {
+				out = append(out, entry.Facts...)
+				next[rel] = entry
+				continue
+			}
+		}
+		start := len(out)
 		if IsInfraSource(name, rel) {
 			out = append(out, scanInfraFile(path, rel, region(rel))...)
 		}
 		if isCodeExt(ext) {
 			out = append(out, codePatternFacts(path, rel, region(rel))...)
 		}
+		next[rel] = CachedScan{Hash: sources[rel].Hash, Facts: append([]Fact(nil), out[start:]...)}
 	}
 	for _, chart := range charts {
 		out = append(out, helmFacts(root, chart)...)
 	}
 	out = dedupeInfra(out)
 	out = append(out, bridgeFacts(out)...)
+	if cache != nil {
+		cache.Root, cache.Files = root, next
+	}
 	return dedupeInfra(out), nil
 }
 

@@ -77,38 +77,57 @@ func (q QuickState) Signature() string {
 // the watcher's poll loop and fsnotify fallback.
 func CaptureQuick(ctx context.Context, root string) (QuickState, error) {
 	qs := QuickState{Dirty: map[string]bool{}, StatusByPath: map[string]string{}, ContentHashes: map[string]string{}}
-	revision, err := Resolve(ctx, root, "HEAD")
-	if err != nil {
-		return qs, fmt.Errorf("watch requires a Git repository with an existing commit: %w", err)
-	}
-	qs.Revision = revision
-	branch, _ := Run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-	qs.Branch = strings.TrimSpace(branch)
 	prefix, err := Run(ctx, root, "rev-parse", "--show-prefix")
 	if err != nil {
 		return qs, err
 	}
 	prefix = strings.TrimSuffix(prefix, "\n")
-	status, err := Run(ctx, root, "-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all", "--", ".")
+	// Porcelain v2 captures branch, commit and dirty paths in the same Git
+	// observation. Separate rev-parse/symbolic-ref calls both cost processes and
+	// could observe different revisions during a checkout.
+	status, err := Run(ctx, root, "-c", "status.relativePaths=true", "status", "--porcelain=v2", "--branch", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all", "--", ".")
 	if err != nil {
 		return qs, err
 	}
 	for _, record := range strings.Split(status, "\x00") {
-		if len(record) < 4 {
+		if strings.HasPrefix(record, "# branch.oid ") {
+			qs.Revision = strings.TrimPrefix(record, "# branch.oid ")
 			continue
 		}
-		code, path := record[:2], record[3:]
-		// Porcelain status paths are repository-relative even when Git is
-		// invoked from a subdirectory; ls-files and our sources are local.
+		if strings.HasPrefix(record, "# branch.head ") {
+			qs.Branch = strings.TrimPrefix(record, "# branch.head ")
+			if qs.Branch == "(detached)" {
+				qs.Branch = ""
+			}
+			continue
+		}
+		if record == "" || strings.HasPrefix(record, "# ") {
+			continue
+		}
+		var code, path string
+		switch {
+		case strings.HasPrefix(record, "? "):
+			code, path = "??", record[2:]
+		case strings.HasPrefix(record, "1 "):
+			fields := strings.SplitN(record, " ", 9)
+			if len(fields) != 9 {
+				return qs, fmt.Errorf("invalid Git status record")
+			}
+			code, path = strings.ReplaceAll(fields[1], ".", " "), fields[8]
+		case strings.HasPrefix(record, "u "):
+			return qs, fmt.Errorf("resolve merge conflicts before indexing: %s", record)
+		default:
+			return qs, fmt.Errorf("unsupported Git status record: %s", record)
+		}
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
 		path = strings.TrimPrefix(path, prefix)
-		if strings.Contains(code, "U") || code == "AA" || code == "DD" {
-			return qs, fmt.Errorf("resolve merge conflicts before indexing: %s", path)
-		}
 		qs.Dirty[path] = true
 		qs.StatusByPath[path] = code
+	}
+	if qs.Revision == "" || qs.Revision == "(initial)" {
+		return qs, fmt.Errorf("watch requires a Git repository with an existing commit")
 	}
 	for path := range qs.Dirty {
 		qs.Paths = append(qs.Paths, path)

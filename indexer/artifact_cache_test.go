@@ -130,38 +130,40 @@ func TestImportProjectReplaysCompactAndLegacyArtifacts(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, scipBacked := range []bool{false, true} {
-		g, calls := artifactTestGraph(t, sources, scipBacked)
-		plan := &projectPlan{project: &pb.Project{Root: "nested", Language: "go"}, projectKey: "go|nested", fingerprint: "fixture", artifact: path, toolName: "fixture", toolVersion: "1", scipBacked: scipBacked, preExisting: true}
-		table := newSymbols()
-		snap := &pb.Snapshot{ToolVersions: map[string]string{}}
-		if err := (Pipeline{}).importProject(context.Background(), g, snap, table, plan); err != nil {
-			t.Fatal(err)
-		}
-		table.apply(g)
-		deriveCalls(g, calls, table)
-		artifact := g.ProjectArtifacts[plan.projectKey]
-		if !bytes.HasPrefix(artifact.Data, []byte(scipArtifactMagic)) || artifact.Fingerprint != plan.fingerprint {
-			t.Fatal("importProject persisted raw artifact or changed fingerprint")
-		}
-		if len(g.EdgeFacts) == 0 {
-			t.Fatal("fixture did not exercise relationships")
-		}
-		for _, cached := range [][]byte{raw, artifact.Data} {
-			replay, calls := artifactTestGraph(t, sources, scipBacked)
-			cachedPlan := *plan
-			cachedPlan.cached = &graph.ProjectArtifact{Fingerprint: plan.fingerprint, Data: cached}
+	for _, refreshed := range []bool{false, true} {
+		for _, scipBacked := range []bool{false, true} {
+			g, calls := artifactTestGraph(t, sources, scipBacked)
+			plan := &projectPlan{project: &pb.Project{Root: "nested", Language: "go"}, projectKey: "go|nested", fingerprint: "fixture", artifact: path, toolName: "fixture", toolVersion: "1", scipBacked: scipBacked, preExisting: true, goLSP: refreshed}
 			table := newSymbols()
-			if err := (Pipeline{}).importProject(context.Background(), replay, &pb.Snapshot{ToolVersions: map[string]string{}}, table, &cachedPlan); err != nil {
+			snap := &pb.Snapshot{ToolVersions: map[string]string{}}
+			if err := (Pipeline{}).importProject(context.Background(), g, snap, table, plan); err != nil {
 				t.Fatal(err)
 			}
-			table.apply(replay)
-			deriveCalls(replay, calls, table)
-			if !bytes.HasPrefix(replay.ProjectArtifacts[plan.projectKey].Data, []byte(scipArtifactMagic)) {
-				t.Fatal("legacy cache was forwarded without compaction")
+			table.apply(g)
+			deriveCalls(g, calls, table)
+			artifact := g.ProjectArtifacts[plan.projectKey]
+			if !bytes.HasPrefix(artifact.Data, []byte(scipArtifactMagic)) || artifact.Fingerprint != plan.fingerprint {
+				t.Fatal("importProject persisted raw artifact or changed fingerprint")
 			}
-			if !reflect.DeepEqual(normalizeGraph(t, g), normalizeGraph(t, replay)) {
-				t.Fatalf("cached replay changed graph (scipBacked=%v, compact=%v)", scipBacked, bytes.HasPrefix(cached, []byte(scipArtifactMagic)))
+			if len(g.EdgeFacts) == 0 {
+				t.Fatal("fixture did not exercise relationships")
+			}
+			for _, cached := range [][]byte{raw, artifact.Data} {
+				replay, calls := artifactTestGraph(t, sources, scipBacked)
+				cachedPlan := *plan
+				cachedPlan.cached = &graph.ProjectArtifact{Fingerprint: plan.fingerprint, Data: cached}
+				table := newSymbols()
+				if err := (Pipeline{}).importProject(context.Background(), replay, &pb.Snapshot{ToolVersions: map[string]string{}}, table, &cachedPlan); err != nil {
+					t.Fatal(err)
+				}
+				table.apply(replay)
+				deriveCalls(replay, calls, table)
+				if !bytes.HasPrefix(replay.ProjectArtifacts[plan.projectKey].Data, []byte(scipArtifactMagic)) {
+					t.Fatal("legacy cache was forwarded without compaction")
+				}
+				if !reflect.DeepEqual(normalizeGraph(t, g), normalizeGraph(t, replay)) {
+					t.Fatalf("cached replay changed graph (scipBacked=%v, compact=%v)", scipBacked, bytes.HasPrefix(cached, []byte(scipArtifactMagic)))
+				}
 			}
 		}
 	}
