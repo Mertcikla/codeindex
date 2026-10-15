@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mertcikla/codeindex/config"
@@ -68,6 +69,23 @@ func TestResolveNameMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if _, err := ResolveName("scip-nonexistent-tool"); err == nil {
 		t.Fatal("ResolveName accepted a missing tool")
+	}
+}
+
+func TestGoToolsIncludeLanguageServerHealth(t *testing.T) {
+	selected := ForFamilies([]string{"go"})
+	if len(selected) != 2 || selected[1].Name != "gopls" || !selected[1].LanguageServer {
+		t.Fatalf("Go tools: %+v", selected)
+	}
+	tool := filepath.Join(t.TempDir(), "gopls")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho 'golang.org/x/tools/gopls v0.24.0'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Tools.Gopls = tool
+	status := CheckTools(context.Background(), cfg, selected[1:])[0]
+	if status.Found || !strings.Contains(status.Error, "LSP health check:") || status.Version == "" {
+		t.Fatalf("accepted a version-only fake server: %+v", status)
 	}
 }
 

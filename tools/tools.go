@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/lsp"
 )
 
 // versionTimeout bounds the version/help probe so doctor cannot hang.
@@ -22,7 +23,7 @@ const versionTimeout = 5 * time.Second
 
 // Only accept version banners or bare versions. Probes may also print Docker
 // diagnostics, runtime messages, or usage text containing unrelated numbers.
-var versionLine = regexp.MustCompile(`(?i)^(?:(?:scip[-_][a-z]+|rust-analyzer)(?:\s+version)?[\s:]+|version[\s:]+)?v?[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[-+][0-9a-z.-]+)?(?:\s+.*)?$`)
+var versionLine = regexp.MustCompile(`(?i)^(?:(?:scip[-_][a-z]+|rust-analyzer|golang.org/x/tools/gopls)(?:\s+version)?[\s:]+|version[\s:]+)?v?[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[-+][0-9a-z.-]+)?(?:\s+.*)?$`)
 
 // Tool describes one external indexer binary.
 type Tool struct {
@@ -38,13 +39,17 @@ type Tool struct {
 	// DownloadURL is the release or package page a user can download the tool
 	// from. It backs the UI's download action for missing or outdated tools.
 	DownloadURL string
-	path        func(config.Config) string
+	// LanguageServer tools are probed with an initialize/shutdown round trip,
+	// as well as a version command. Executable presence alone is insufficient.
+	LanguageServer bool
+	path           func(config.Config) string
 }
 
 // All returns every indexer the pipeline knows how to invoke.
 func All() []Tool {
 	return []Tool{
 		{Family: "go", Name: "scip-go", VersionArgs: []string{"--version"}, MinVersion: "0.2.7", InstallHint: "go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.7", DownloadURL: "https://github.com/scip-code/scip-go/releases/tag/v0.2.7", path: func(c config.Config) string { return c.Tools.SCIPGo }},
+		{Family: "go", Name: "gopls", VersionArgs: []string{"version"}, LanguageServer: true, InstallHint: "go install golang.org/x/tools/gopls@latest", DownloadURL: "https://go.dev/gopls/", path: func(c config.Config) string { return c.Tools.Gopls }},
 		{Family: "web", Name: "scip-typescript", VersionArgs: []string{"--version"}, MinVersion: "0.4.0", InstallHint: "npm install -g @sourcegraph/scip-typescript", DownloadURL: "https://github.com/sourcegraph/scip-typescript/releases", path: func(c config.Config) string { return c.Tools.SCIPTypeScript }},
 		{Family: "python", Name: "scip-python", VersionArgs: []string{"--version"}, MinVersion: "0.6.6", InstallHint: "npm install -g @sourcegraph/scip-python", DownloadURL: "https://github.com/sourcegraph/scip-python/releases", path: func(c config.Config) string { return c.Tools.SCIPPython }},
 		{Family: "dotnet", Name: "scip-dotnet", VersionArgs: []string{"--version"}, MinVersion: "0.2.14", InstallHint: "dotnet tool install --global scip-dotnet", DownloadURL: "https://github.com/sourcegraph/scip-dotnet/releases", path: func(c config.Config) string { return c.Tools.SCIPDotnet }},
@@ -209,6 +214,23 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 	s.Path = path
 	s.Found = true
 	s.Version = probeVersion(ctx, path, t.VersionArgs)
+	if t.LanguageServer {
+		probe, stop := context.WithTimeout(ctx, versionTimeout)
+		defer stop()
+		root, err := os.MkdirTemp("", "codeindex-lsp-health-")
+		if err == nil {
+			defer func() { _ = os.RemoveAll(root) }()
+			var client *lsp.Client
+			client, err = lsp.Start(probe, path, root)
+			if client != nil {
+				client.Close()
+			}
+		}
+		if err != nil {
+			s.Found = false
+			s.Error = "LSP health check: " + err.Error()
+		}
+	}
 	if t.MinVersion != "" {
 		if ok, comparable := versionAtLeast(s.Version, t.MinVersion); comparable && !ok {
 			s.BelowMinimum = true

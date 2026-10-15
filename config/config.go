@@ -26,6 +26,7 @@ type Config struct {
 		Dir     string `yaml:"dir"`
 	} `yaml:"web"`
 	Tools struct {
+		Gopls          string `yaml:"gopls" json:"Gopls,omitempty"`
 		SCIPGo         string `yaml:"scip_go"`
 		SCIPTypeScript string `yaml:"scip_typescript"`
 		SCIPPython     string `yaml:"scip_python"`
@@ -51,6 +52,7 @@ func Default() Config {
 	c.Surreal.Username = "root"
 	c.Surreal.Password = "root"
 	c.Tools.SCIPGo = "scip-go"
+	c.Tools.Gopls = "gopls"
 	c.Tools.SCIPTypeScript = "scip-typescript"
 	c.Tools.SCIPPython = "scip-python"
 	c.Tools.SCIPDotnet = "scip-dotnet"
@@ -85,6 +87,9 @@ func Load(path string) (Config, error) {
 // they take precedence over file and global settings. It is used by the CLI's
 // config bridge as well as Load.
 func (c *Config) ApplyEnv() {
+	if v, ok := os.LookupEnv("CODEINDEX_GOPLS"); ok {
+		c.Tools.Gopls = v
+	}
 	env := map[string]*string{"CODEINDEX_GRPC_ADDRESS": &c.GRPC.Address, "CODEINDEX_SURREAL_URL": &c.Surreal.URL, "CODEINDEX_SURREAL_NAMESPACE": &c.Surreal.Namespace, "CODEINDEX_SURREAL_DATABASE": &c.Surreal.Database, "CODEINDEX_SURREAL_USERNAME": &c.Surreal.Username, "CODEINDEX_SURREAL_PASSWORD": &c.Surreal.Password, "CODEINDEX_SCIP_GO": &c.Tools.SCIPGo, "CODEINDEX_SCIP_TYPESCRIPT": &c.Tools.SCIPTypeScript, "CODEINDEX_SCIP_PYTHON": &c.Tools.SCIPPython, "CODEINDEX_SCIP_DOTNET": &c.Tools.SCIPDotnet, "CODEINDEX_SCIP_CLANG": &c.Tools.SCIPClang, "CODEINDEX_SCIP_JAVA": &c.Tools.SCIPJava, "CODEINDEX_SCIP_DART": &c.Tools.SCIPDart, "CODEINDEX_SCIP_PHP": &c.Tools.SCIPPhp, "CODEINDEX_SCIP_RUBY": &c.Tools.SCIPRuby, "CODEINDEX_RUST_ANALYZER": &c.Tools.RustAnalyzer}
 	for name, p := range env {
 		if v, ok := os.LookupEnv(name); ok {

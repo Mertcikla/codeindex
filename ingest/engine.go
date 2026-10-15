@@ -28,6 +28,8 @@ type Engine struct {
 	// Manifests, when non-nil, persists working-tree file hashes across builds so
 	// a watcher's repeated scans only rehash files that moved.
 	Manifests *gitstate.ManifestCache
+	// Semantics owns the watcher's language server for the live checkout.
+	Semantics *indexer.WatchSession
 }
 
 func (e Engine) Base(ctx context.Context, id string) (*indexer.IncrementalBase, error) {
@@ -169,6 +171,7 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 		pipeline := indexer.Pipeline{Config: e.Config, RepositoryID: e.RepositoryID}
 		if target.WorkingTree {
 			pipeline.ManifestCache = e.Manifests
+			pipeline.Semantics = e.Semantics
 		}
 		input := &pb.IndexRequest{Directory: directory, Exclude: e.Exclude, Incremental: base != nil}
 		snap, g, reused, err := pipeline.BuildIncremental(ctx, input, e.Progress, base)

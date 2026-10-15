@@ -83,6 +83,54 @@ is required. Existing content-addressed database rows are not rewritten by this
 producer change. If the importer needs additional fields in future, bump the
 cache format and relationship version to invalidate insufficient caches.
 
+## Watch semantic layer (Go)
+
+Hosts can create `indexer.NewWatchSession(ctx, cfg, root)` before the initial
+SCIP build and attach it to `ingest.Engine.Semantics`. The session warms gopls
+in parallel, lives for the checkout's watch lifetime, and is used only for the
+working tree. Close it when watching stops. Historical checkouts always use
+SCIP; no editor overlay is shared with a historical build.
+
+The Go adapter replaces changed function-body occurrences through LSP definition
+queries, synchronizing the entire edit batch before querying and checking pull
+diagnostics. It retains the baseline's declaration identities, documentation,
+signatures and implementation relationships, and remaps shifted source ranges.
+External calls retain their SCIP package/descriptor keys. Output uses the same
+reduced SCIP cache as a regular build: unused SCIP metadata is omitted rather
+than recreated through LSP.
+
+This first gate supports body-only changes in a single ordinary Go module with
+scip-go 0.2.7. API, import, documentation, module/build configuration and file
+membership changes, unsupported external declarations, workspaces, replacements,
+or unhealthy servers fall back to SCIP. An explicit `GOWORK=off` disables
+ancestor workspace detection. Fallbacks invalidate LSP overlays before reuse.
+The existing manifest/drift verification and immutable dirty/commit snapshot
+publication apply to both paths.
+
+Configure the server with `tools.gopls` or `CODEINDEX_GOPLS`. `tools.All` and
+`tools.ForFamilies` include gopls; its availability requires an LSP handshake,
+not merely a successful version banner. tld exposes this in doctor and its
+repository tool checklist, including probe errors.
+
+Run real-tool graph parity with:
+
+```sh
+CODEINDEX_TEST_LSP=1 go test ./indexer -run TestGoLSP -v
+CODEINDEX_LSP_REPOS=/path/to/go-repo:/path/to/another-go-repo \
+  go test ./indexer -run TestGoLSPRepositoryParity -v
+```
+
+The repository test copies its inputs, adds references in two source files, and
+compares every persisted fact/edge field after removing snapshot-specific IDs.
+Gorilla mux v1.8.1, pflag v1.0.10, Cobra v1.10.2, bun v1.2.18 and Gorilla
+WebSocket v1.5.3 pass this gate. In one local two-file run, bun's 1,510 facts /
+8,606 edges took 0.90 s through LSP versus 2.22 s through fresh SCIP; WebSocket
+took 0.46 s versus 0.95 s. These are full pipeline times, not server-only query
+times, and are not performance guarantees. The broader Go gate remains
+open for declaration/membership/build changes; TypeScript, Rust and Python
+adapters must follow in that order after their preceding language passes its
+broader parity gate. They are not enabled by the Go body-edit gate.
+
 The five artifacts captured from the tld database reduced from 66,271,827 to
 3,616,709 bytes (94.5%), with identical graph facts and edges on replay. Run
 `TestArtifactCacheRealData` with `CODEINDEX_ARTIFACT_FIXTURE` pointing to an

@@ -26,6 +26,8 @@ import (
 
 type Pipeline struct {
 	Config config.Config
+	// Semantics is a checkout-scoped LSP session, used only for watch builds.
+	Semantics *WatchSession
 	// RepositoryID preserves canonical identity when indexing a temporary checkout.
 	RepositoryID string
 	// Metrics, when non-nil, collects coarse per-stage timings and item counts
@@ -453,6 +455,24 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		}
 	}
 	plan.run = func(context.Context) error {
+		if family == familyGo && p.Semantics != nil && base != nil && plan.toolVersion == "0.2.7" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
+				refreshErr := p.Semantics.refreshGoLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
+				stop()
+				if refreshErr == nil {
+					emitProgress(progress, Progress{Stage: "scip", Detail: "Go LSP semantic refresh · " + pr.Root})
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				emitProgress(progress, Progress{Stage: "scip", Detail: fmt.Sprintf("Go LSP refresh unavailable (%v) · using SCIP", refreshErr)})
+			}
+		}
+		if family == familyGo && p.Semantics != nil && base != nil {
+			defer p.Semantics.Invalidate()
+		}
 		if pythonTarget != "" {
 			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: "running scip-python · target " + pythonTarget})
 			_, targetErr := runTool(append(slices.Clone(argv), "--target-only", pythonTarget))

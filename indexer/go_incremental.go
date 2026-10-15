@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/format"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"io"
 	"os"
@@ -37,12 +38,14 @@ func goChangedPackages(project *pb.Project, snap *pb.Snapshot, g *graph.Graph, b
 		(os.Getenv("GOPACKAGESDRIVER") != "" && os.Getenv("GOPACKAGESDRIVER") != "off") {
 		return nil
 	}
-	for dir := projectDir; ; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return nil
-		}
-		if filepath.Dir(dir) == dir {
-			break
+	if os.Getenv("GOWORK") != "off" {
+		for dir := projectDir; ; dir = filepath.Dir(dir) {
+			if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+				return nil
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
 		}
 	}
 	module, err := os.ReadFile(filepath.Join(projectDir, "go.mod"))
@@ -155,7 +158,26 @@ func goBodyOnlyChange(before, after []byte) bool {
 		if err := format.Node(&output, set, file); err != nil {
 			return nil, err
 		}
-		return append(output.Bytes(), []byte(strings.Join(directives, "\n"))...), nil
+		// format.Node preserves blank lines using original token positions.
+		// A larger body can therefore change whitespace between declarations
+		// even after removing the bodies. Compare tokens, not layout.
+		var normalized bytes.Buffer
+		var scan scanner.Scanner
+		tokens := token.NewFileSet().AddFile("shape.go", -1, output.Len())
+		scan.Init(tokens, output.Bytes(), nil, 0)
+		for {
+			_, tok, lit := scan.Scan()
+			if tok == token.EOF {
+				break
+			}
+			if tok != token.SEMICOLON {
+				normalized.WriteString(tok.String())
+				normalized.WriteByte(0)
+				normalized.WriteString(lit)
+				normalized.WriteByte(0)
+			}
+		}
+		return append(normalized.Bytes(), []byte(strings.Join(directives, "\n"))...), nil
 	}
 	a, err := shape(before)
 	if err != nil {
