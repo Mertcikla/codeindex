@@ -38,6 +38,9 @@ func (e Engine) Base(ctx context.Context, id string) (*indexer.IncrementalBase, 
 	if err != nil {
 		return nil, err
 	}
+	if indexer.CheckSnapshot(snap) != nil {
+		return nil, nil
+	}
 	g, err := e.Store.LoadGraph(ctx, id)
 	if err != nil {
 		return nil, err
@@ -100,8 +103,8 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 		if snap.RepositoryId != e.RepositoryID {
 			return nil, nil, false, fmt.Errorf("snapshot belongs to another repository")
 		}
-		if snap.IngestionStatus != "complete" && snap.IngestionStatus != "" {
-			return nil, nil, false, fmt.Errorf("snapshot indexing is incomplete")
+		if err := indexer.CheckSnapshot(snap); err != nil {
+			return nil, nil, false, err
 		}
 		return snap, nil, true, nil
 	}
@@ -115,7 +118,7 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 	find := func(sha string) *pb.Snapshot {
 		for i := len(snapshots) - 1; i >= 0; i-- {
 			snap := snapshots[i]
-			if snap.Provenance == "commit" && snap.GitRevision == sha && snap.ConfigHash == configHash && snap.IngestionStatus == "complete" && indexer.ToolchainCompatible(ctx, e.Config, e.Root, snap, nil) {
+			if snap.Provenance == "commit" && snap.GitRevision == sha && snap.ConfigHash == configHash && indexer.CheckSnapshot(snap) == nil && indexer.ToolchainCompatible(ctx, e.Config, e.Root, snap, nil) {
 				return snap
 			}
 		}
@@ -146,7 +149,7 @@ func (e Engine) PrepareWithGraph(ctx context.Context, target *pb.Revision) (*pb.
 	}
 	var base *indexer.IncrementalBase
 	for i := len(snapshots) - 1; i >= 0; i-- {
-		if snapshots[i].ConfigHash == configHash && snapshots[i].IngestionStatus == "complete" {
+		if snapshots[i].ConfigHash == configHash && indexer.CheckSnapshot(snapshots[i]) == nil {
 			base, err = e.Base(ctx, snapshots[i].Id)
 			if err != nil {
 				return nil, nil, false, err

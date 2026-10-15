@@ -194,3 +194,59 @@ func TestCaptureQuickDetectsRepeatedDirtyEdits(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptureFromSubdirectory(t *testing.T) {
+	ctx := context.Background()
+	root := repo(t)
+	prefix := "services/python service"
+	sub := filepath.Join(root, filepath.FromSlash(prefix))
+	if err := os.MkdirAll(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"worker.py", "gone.py", "staged.py"} {
+		put(t, sub, name, "value = 1\n")
+	}
+	fixtureGit(t, root, "add", ".")
+	fixtureGit(t, root, "commit", "-m", "nested project")
+	clean, err := Capture(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, sub, "worker.py", "value = 2\n")
+	put(t, sub, "new\nfile.py", "value = 3\n")
+	put(t, sub, "staged.py", "value = 4\n")
+	fixtureGit(t, root, "add", prefix+"/staged.py")
+	put(t, sub, "staged.py", "value = 5\n")
+	if err := os.Remove(filepath.Join(sub, "gone.py")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, root, "a.go", "package changed\n")
+	full, err := Capture(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quick, err := CaptureQuick(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"worker.py", "gone.py", "staged.py", "new\nfile.py"} {
+		if !full.Dirty[name] || !quick.Dirty[name] {
+			t.Fatalf("missing local dirty path %q: full=%v quick=%v", name, full.Dirty, quick.Dirty)
+		}
+	}
+	if len(full.Dirty) != 4 || len(quick.Dirty) != 4 || full.Blobs["worker.py"] == "" {
+		t.Fatalf("unexpected nested state: full=%+v quick=%+v", full, quick)
+	}
+	put(t, sub, "worker.py", "value = 9\n")
+	next, err := Capture(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextQuick, err := CaptureQuick(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Signature == next.Signature || quick.Signature() == nextQuick.Signature() || clean.Signature == full.Signature {
+		t.Fatal("nested edits did not change signatures")
+	}
+}

@@ -84,6 +84,11 @@ func CaptureQuick(ctx context.Context, root string) (QuickState, error) {
 	qs.Revision = revision
 	branch, _ := Run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
 	qs.Branch = strings.TrimSpace(branch)
+	prefix, err := Run(ctx, root, "rev-parse", "--show-prefix")
+	if err != nil {
+		return qs, err
+	}
+	prefix = strings.TrimSuffix(prefix, "\n")
 	status, err := Run(ctx, root, "-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all", "--", ".")
 	if err != nil {
 		return qs, err
@@ -93,6 +98,12 @@ func CaptureQuick(ctx context.Context, root string) (QuickState, error) {
 			continue
 		}
 		code, path := record[:2], record[3:]
+		// Porcelain status paths are repository-relative even when Git is
+		// invoked from a subdirectory; ls-files and our sources are local.
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		path = strings.TrimPrefix(path, prefix)
 		if strings.Contains(code, "U") || code == "AA" || code == "DD" {
 			return qs, fmt.Errorf("resolve merge conflicts before indexing: %s", path)
 		}
@@ -176,6 +187,11 @@ func Capture(ctx context.Context, root string) (State, error) {
 	state.Revision = revision
 	branch, _ := Run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
 	state.Branch = strings.TrimSpace(branch)
+	prefix, err := Run(ctx, root, "rev-parse", "--show-prefix")
+	if err != nil {
+		return state, err
+	}
+	prefix = strings.TrimSuffix(prefix, "\n")
 	status, err := Run(ctx, root, "-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all", "--", ".")
 	if err != nil {
 		return state, err
@@ -186,6 +202,12 @@ func Capture(ctx context.Context, root string) (State, error) {
 			continue
 		}
 		code, path := record[:2], record[3:]
+		// Porcelain status paths are repository-relative even when Git is
+		// invoked from a subdirectory; ls-files and our sources are local.
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		path = strings.TrimPrefix(path, prefix)
 		if strings.Contains(code, "U") || code == "AA" || code == "DD" {
 			return state, fmt.Errorf("resolve merge conflicts before indexing: %s", path)
 		}
@@ -219,11 +241,6 @@ func Capture(ctx context.Context, root string) (State, error) {
 		}
 	}
 	sort.Strings(state.Paths)
-	prefix, err := Run(ctx, root, "rev-parse", "--show-prefix")
-	if err != nil {
-		return state, err
-	}
-	prefix = strings.TrimSuffix(prefix, "\n")
 	tree, err := Run(ctx, root, "ls-tree", "-r", "--full-tree", "-z", revision)
 	if err != nil {
 		return state, err

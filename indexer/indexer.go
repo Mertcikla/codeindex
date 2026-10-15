@@ -169,6 +169,9 @@ func sourceHashes(sources map[string]*graph.Source) map[string]string {
 }
 
 func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress ProgressFunc, base *IncrementalBase) (*pb.Snapshot, *graph.Graph, bool, error) {
+	if base != nil && !base.unpublished && CheckSnapshot(base.Snapshot) != nil {
+		base = nil
+	}
 	root, err := filepath.Abs(req.Directory)
 	if err != nil {
 		return nil, nil, false, err
@@ -230,9 +233,8 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	snap.ToolVersions = map[string]string{
-		"gotreesitter": gotreesitterVersion(),
-	}
+	snap.ToolVersions = SnapshotVersions()
+	snap.ToolVersions["gotreesitter"] = gotreesitterVersion()
 	for _, s := range sources {
 		snap.Sources = append(snap.Sources, &pb.SourceFile{Path: s.Path, Hash: s.Hash, Size: uint64(len(s.Text))})
 	}
@@ -372,7 +374,11 @@ type projectPlan struct {
 // safe to execute concurrently with other projects' runs.
 func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snapshot, req *pb.IndexRequest, pr *pb.Project, family string, scipBacked bool, root, projectDir, projectKey, fingerprint, tmp string, index, total int, base *IncrementalBase, progress ProgressFunc) (*projectPlan, error) {
 	plan := &projectPlan{project: pr, scipBacked: scipBacked, projectDir: projectDir, projectKey: projectKey, fingerprint: fingerprint}
-	if base != nil && req.ScipArtifacts[pr.Root] == "" {
+	// scip-python can infer its package version from HEAD. Even unchanged
+	// source files need a refresh after a commit so cached symbol metadata
+	// cannot retain the previous revision (including for empty commits).
+	pythonRevisionChanged := family == familyPython && base != nil && base.Snapshot.GitRevision != snap.GitRevision
+	if base != nil && !pythonRevisionChanged && req.ScipArtifacts[pr.Root] == "" {
 		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok && cached.Fingerprint == fingerprint {
 			spec, err := indexerForFamily(family, p.Config)
 			if err != nil {
