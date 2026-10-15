@@ -101,11 +101,11 @@ External calls retain their SCIP package/descriptor keys. Output uses the same
 reduced SCIP cache as a regular build: unused SCIP metadata is omitted rather
 than recreated through LSP.
 
-This first gate supports body-only changes in a single ordinary Go module with
-scip-go 0.2.7. API, import, documentation, module/build configuration and file
-membership changes, unsupported external declarations, workspaces, replacements,
-or unhealthy servers fall back to SCIP. An explicit `GOWORK=off` disables
-ancestor workspace detection. Fallbacks invalidate LSP overlays before reuse.
+This gate supports body-only changes in a single indexed Go module with
+scip-go 0.2.7, including modules using `go.work` or `replace` directives.
+API, import, documentation, module/build configuration and file membership
+changes, unsupported external declarations, or unhealthy servers fall back to
+SCIP. Fallbacks invalidate LSP overlays before reuse.
 The existing manifest/drift verification and immutable dirty/commit snapshot
 publication apply to both paths.
 

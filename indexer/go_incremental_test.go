@@ -171,11 +171,6 @@ func TestGoEnvironmentInvalidatesCache(t *testing.T) {
 }
 
 func TestGoChangedPackagesSafety(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/fixture\n\ngo 1.26\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GOWORK", "off")
 	t.Setenv("GOPACKAGESDRIVER", "")
 	project := &pb.Project{Root: ".", ConfigPath: "go.mod", Language: "go"}
 	before := []byte("package worker\nfunc Work() int { return 1 }\n")
@@ -195,7 +190,7 @@ func TestGoChangedPackagesSafety(t *testing.T) {
 	current.Manifest.Files[0].Hash = graph.Hash(after)
 	g := graph.NewGraph("repo", "current")
 	g.Sources["worker/work.go"] = source("worker/work.go", after)
-	if got := goChangedPackages(project, current, g, base, root); !reflect.DeepEqual(got, []string{"./worker"}) {
+	if got := goChangedPackages(project, current, g, base); !reflect.DeepEqual(got, []string{"./worker"}) {
 		t.Fatalf("packages=%v", got)
 	}
 	for _, tc := range []struct {
@@ -215,13 +210,13 @@ func TestGoChangedPackagesSafety(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := proto.Clone(current).(*pb.Snapshot)
 			tc.alter(snap)
-			if got := goChangedPackages(project, snap, g, base, root); len(got) != 0 {
+			if got := goChangedPackages(project, snap, g, base); len(got) != 0 {
 				t.Fatalf("unsafe partial: %v", got)
 			}
 		})
 	}
 	baseSnapshot.Warnings = []string{"previous failure"}
-	if got := goChangedPackages(project, current, g, base, root); len(got) != 0 {
+	if got := goChangedPackages(project, current, g, base); len(got) != 0 {
 		t.Fatalf("reused incomplete base: %v", got)
 	}
 }

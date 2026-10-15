@@ -78,7 +78,7 @@ func lspPosition(src *graph.Source, offset int, encoding string) lsp.Position {
 // diagnostics, unused external symbol metadata and redundant text are omitted.
 // API edits stay on SCIP until a broader adapter passes full graph parity.
 func (s *WatchSession) refreshGoLSP(ctx context.Context, root string, project *pb.Project, snap *pb.Snapshot, g *graph.Graph, base *IncrementalBase, cached graph.ProjectArtifact, artifact string) error {
-	if len(goChangedPackages(project, snap, g, base, filepath.Join(root, filepath.FromSlash(project.Root)))) == 0 {
+	if len(goChangedPackages(project, snap, g, base)) == 0 {
 		return fmt.Errorf("change requires full semantic indexing")
 	}
 	edits := map[string]*goEdit{}

@@ -20,10 +20,10 @@ import (
 	"github.com/mertcikla/codeindex/tools"
 )
 
-// Package refresh is deliberately limited to body-only edits in one ordinary
+// Package refresh is deliberately limited to body-only edits in one indexed
 // module. Declarations, imports, named types, build inputs and source membership
 // must stay unchanged; otherwise callers and implementations may need reindexing.
-func goChangedPackages(project *pb.Project, snap *pb.Snapshot, g *graph.Graph, base *IncrementalBase, projectDir string) []string {
+func goChangedPackages(project *pb.Project, snap *pb.Snapshot, g *graph.Graph, base *IncrementalBase) []string {
 	if base == nil || base.Snapshot.ConfigHash != snap.ConfigHash || len(base.Snapshot.Warnings) != 0 ||
 		!base.Snapshot.GetManifest().GetComplete() || !snap.GetManifest().GetComplete() {
 		return nil
@@ -36,20 +36,6 @@ func goChangedPackages(project *pb.Project, snap *pb.Snapshot, g *graph.Graph, b
 	}
 	if goProjects != 1 || filepath.Base(project.ConfigPath) != "go.mod" ||
 		(os.Getenv("GOPACKAGESDRIVER") != "" && os.Getenv("GOPACKAGESDRIVER") != "off") {
-		return nil
-	}
-	if os.Getenv("GOWORK") != "off" {
-		for dir := projectDir; ; dir = filepath.Dir(dir) {
-			if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-				return nil
-			}
-			if filepath.Dir(dir) == dir {
-				break
-			}
-		}
-	}
-	module, err := os.ReadFile(filepath.Join(projectDir, "go.mod"))
-	if err != nil || strings.Contains(string(module), "replace") || (os.Getenv("GOWORK") != "" && os.Getenv("GOWORK") != "off") {
 		return nil
 	}
 	previous := map[string]*pb.SourceFile{}

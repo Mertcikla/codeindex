@@ -441,7 +441,7 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 	var previous graph.ProjectArtifact
 	if family == familyGo && plan.toolVersion == "0.2.7" && base != nil && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
-			packages = goChangedPackages(pr, snap, g, base, projectDir)
+			packages = goChangedPackages(pr, snap, g, base)
 			previous = cached
 		}
 	}
