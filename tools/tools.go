@@ -39,7 +39,7 @@ type Tool struct {
 // All returns every indexer the pipeline knows how to invoke.
 func All() []Tool {
 	return []Tool{
-		{Family: "go", Name: "scip-go", VersionArgs: []string{"--version"}, MinVersion: "0.1.26", InstallHint: "go install github.com/scip-code/scip-go/cmd/scip-go@latest", DownloadURL: "https://github.com/scip-code/scip-go/releases", path: func(c config.Config) string { return c.Tools.SCIPGo }},
+		{Family: "go", Name: "scip-go", VersionArgs: []string{"--version"}, MinVersion: "0.2.7", InstallHint: "go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.7", DownloadURL: "https://github.com/scip-code/scip-go/releases/tag/v0.2.7", path: func(c config.Config) string { return c.Tools.SCIPGo }},
 		{Family: "web", Name: "scip-typescript", VersionArgs: []string{"--version"}, MinVersion: "0.4.0", InstallHint: "npm install -g @sourcegraph/scip-typescript", DownloadURL: "https://github.com/sourcegraph/scip-typescript/releases", path: func(c config.Config) string { return c.Tools.SCIPTypeScript }},
 		{Family: "python", Name: "scip-python", VersionArgs: []string{"--version"}, MinVersion: "0.6.6", InstallHint: "npm install -g @sourcegraph/scip-python", DownloadURL: "https://github.com/sourcegraph/scip-python/releases", path: func(c config.Config) string { return c.Tools.SCIPPython }},
 		{Family: "dotnet", Name: "scip-dotnet", VersionArgs: []string{"--version"}, MinVersion: "0.2.14", InstallHint: "dotnet tool install --global scip-dotnet", DownloadURL: "https://github.com/sourcegraph/scip-dotnet/releases", path: func(c config.Config) string { return c.Tools.SCIPDotnet }},

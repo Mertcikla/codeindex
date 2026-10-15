@@ -141,6 +141,9 @@ func TestIndexerSpecs(t *testing.T) {
 				t.Fatalf("%s declared explicit output but argv lacks artifact: %v", family, argv)
 			}
 		}
+		if family == familyGo && !slices.Contains(argv, "--skip-tests") {
+			t.Fatalf("go argv must skip tests: %v", argv)
+		}
 		if family == familyClang {
 			joined := strings.Join(argv, " ")
 			if !strings.Contains(joined, "compile_commands.json") {

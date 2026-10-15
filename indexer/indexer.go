@@ -287,7 +287,7 @@ func (p Pipeline) buildOnce(ctx context.Context, req *pb.IndexRequest, progress 
 		projectDir := filepath.Join(root, filepath.FromSlash(pr.Root))
 		projectKey := family + "|" + pr.Root
 		fingerprint := projectFingerprints[projectKey]
-		plans[i], planErrs[i] = p.planProject(ctx, g, req, pr, family, scipBacked, root, projectDir, projectKey, fingerprint, tmp, i, totalProjects, base, progress)
+		plans[i], planErrs[i] = p.planProject(ctx, g, snap, req, pr, family, scipBacked, root, projectDir, projectKey, fingerprint, tmp, i, totalProjects, base, progress)
 	}
 	runPlans(ctx, plans, planErrs)
 	for i, pr := range projects {
@@ -370,7 +370,7 @@ type projectPlan struct {
 // the incremental base when its fingerprint and tool version match, an explicit
 // caller artifact, or a tool run. The returned run function, when non-nil, is
 // safe to execute concurrently with other projects' runs.
-func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, req *pb.IndexRequest, pr *pb.Project, family string, scipBacked bool, root, projectDir, projectKey, fingerprint, tmp string, index, total int, base *IncrementalBase, progress ProgressFunc) (*projectPlan, error) {
+func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snapshot, req *pb.IndexRequest, pr *pb.Project, family string, scipBacked bool, root, projectDir, projectKey, fingerprint, tmp string, index, total int, base *IncrementalBase, progress ProgressFunc) (*projectPlan, error) {
 	plan := &projectPlan{project: pr, scipBacked: scipBacked, projectDir: projectDir, projectKey: projectKey, fingerprint: fingerprint}
 	if base != nil && req.ScipArtifacts[pr.Root] == "" {
 		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok && cached.Fingerprint == fingerprint {
@@ -429,7 +429,34 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, req *pb.Index
 		defer cancel()
 		return tools.Run(toolCtx, tool, args, projectDir)
 	}
+	var packages []string
+	var previous graph.ProjectArtifact
+	if family == familyGo && plan.toolVersion == "0.2.7" && base != nil && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+		if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+			packages = goChangedPackages(pr, snap, g, base, projectDir)
+			previous = cached
+		}
+	}
 	plan.run = func(context.Context) error {
+		if len(packages) > 0 {
+			packageCtx, cancel := context.WithTimeout(ctx, p.Config.ToolTimeout())
+			defer cancel()
+			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: fmt.Sprintf("running scip-go · packages %s", strings.Join(packages, ", "))})
+			// Compile validation and SCIP loading share Go's build cache and can
+			// run together. Both must succeed before cached documents are used.
+			buildable := make(chan bool, 1)
+			go func() { buildable <- goPackagesBuildable(packageCtx, projectDir, packages) }()
+			_, runErr := runTool(append(slices.Clone(argv), packages...))
+			if valid := <-buildable; valid && runErr == nil {
+				if err := mergeGoArtifact(packageCtx, previous.Data, plan.artifact, pr, g, packages); err == nil {
+					return nil
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			emitProgress(progress, Progress{Stage: "scip", Current: int64(index), Total: int64(total), Detail: "package refresh unavailable · running full scip-go"})
+		}
 		if generated != "" {
 			// scip-typescript writes an inferred tsconfig.json into the
 			// project; remove it so indexing does not dirty the checkout or

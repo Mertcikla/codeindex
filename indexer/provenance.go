@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,7 +19,7 @@ import (
 
 // Bump when semantic import or relationship semantics change, independently
 // of syntax caches.
-const relationshipVersion = 6
+const relationshipVersion = 7
 
 // CaptureInputs fingerprints exactly the source/configuration inputs used by indexing.
 func CaptureInputs(ctx context.Context, root string, cfg config.Config, excludes []string) (fingerprint, revision, branch, provenance string, err error) {
@@ -33,8 +34,30 @@ func ConfigurationHash(cfg config.Config, req *pb.IndexRequest) string {
 		SCIPArtifacts          map[string]string
 		ExtractionVersion      int
 		RelationshipVersion    int
-	}{cfg, req.Exclude, req.ProjectRoots, req.ScipArtifacts, syntaxCacheVersion, relationshipVersion})
+		GoEnvironment          []string
+	}{cfg, req.Exclude, req.ProjectRoots, req.ScipArtifacts, syntaxCacheVersion, relationshipVersion, goEnvironment()})
 	return graph.Hash(raw)
+}
+
+// Build flags and the persistent `go env -w` file affect package selection and
+// typing even when repository files stay unchanged. Include them in cache keys.
+func goEnvironment() []string {
+	values := []string{runtime.GOOS, runtime.GOARCH, runtime.Version()}
+	for _, key := range []string{"GOOS", "GOARCH", "CGO_ENABLED", "GOFLAGS", "GOTOOLCHAIN", "GOROOT", "GOPATH", "GOMODCACHE", "GOWORK", "GOPACKAGESDRIVER", "GOENV", "CC", "CXX", "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS", "PKG_CONFIG"} {
+		values = append(values, key+"="+os.Getenv(key))
+	}
+	envFile := os.Getenv("GOENV")
+	if envFile == "" {
+		if dir, err := os.UserConfigDir(); err == nil {
+			envFile = filepath.Join(dir, "go", "env")
+		}
+	}
+	if envFile != "off" {
+		if raw, err := os.ReadFile(envFile); err == nil {
+			values = append(values, graph.Hash(raw))
+		}
+	}
+	return values
 }
 
 func captureInputs(ctx context.Context, root string, cfg config.Config, req *pb.IndexRequest) (fingerprint, revision, branch, provenance string, err error) {
