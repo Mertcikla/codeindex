@@ -12,12 +12,13 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/odvcencio/gotreesitter v0.55.1
 	github.com/scip-code/scip/bindings/go/scip v0.10.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sourcegraph/beaut v0.0.0-20240611013027-627e4c25335a // indirect
 )

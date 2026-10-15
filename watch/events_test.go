@@ -2,6 +2,10 @@ package watch
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -70,5 +74,75 @@ func TestSettleReportsDebouncing(t *testing.T) {
 	signature, err := d.settle(context.Background(), func(context.Context) (string, error) { return "changed", nil })
 	if err != nil || signature != "changed" || len(states) != 1 || states[0] != "debouncing" {
 		t.Fatalf("settle: %s %v states %v", signature, err, states)
+	}
+}
+
+// A save before watches are registered produces no event. Both detector modes
+// must capture it immediately instead of waiting for their polling interval.
+func TestInitialCaptureIncludesPreStartupSave(t *testing.T) {
+	for _, polling := range []bool{false, true} {
+		t.Run(fmt.Sprintf("polling=%v", polling), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "main.go")
+			if err := os.WriteFile(path, []byte("saved before startup"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			d := NewDetector(Options{Root: root, PollInterval: time.Hour})
+			defer func() { _ = d.Close() }()
+			if polling {
+				d.usingFS = false
+			} else if !d.usingFS {
+				t.Fatal("filesystem watches unavailable")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			got, err := d.Next(ctx, "", func(context.Context) (string, error) {
+				raw, err := os.ReadFile(path)
+				return string(raw), err
+			})
+			if err != nil || got != "saved before startup" {
+				t.Fatalf("initial capture = %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInitialCapturePreservesSubsequentEvents(t *testing.T) {
+	root := t.TempDir()
+	d := NewDetector(Options{Root: root, Debounce: time.Millisecond, PollInterval: time.Hour})
+	defer func() { _ = d.Close() }()
+	if !d.usingFS {
+		t.Fatal("filesystem watches unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := d.Next(ctx, "", func(context.Context) (string, error) {
+		// This event arrives during the initial capture/indexing window.
+		return "initial", os.WriteFile(filepath.Join(root, "main.go"), []byte("later save"), 0600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Next(ctx, "initial", func(context.Context) (string, error) { return "later", nil })
+	if err != nil || got != "later" {
+		t.Fatalf("follow-up capture = %q, %v", got, err)
+	}
+}
+
+func TestInitialCaptureErrorAndCancellation(t *testing.T) {
+	failure := errors.New("capture failed")
+	d := &Detector{}
+	if _, err := d.Next(context.Background(), "", func(context.Context) (string, error) {
+		return "", failure
+	}); !errors.Is(err, failure) {
+		t.Fatalf("capture error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.Next(ctx, "", func(context.Context) (string, error) {
+		t.Fatal("capture called after cancellation")
+		return "", nil
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
 	}
 }

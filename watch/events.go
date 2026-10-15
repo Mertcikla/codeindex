@@ -15,6 +15,9 @@ import (
 	"github.com/mertcikla/codeindex/parser"
 )
 
+// DefaultDebounce is the quiet window shared by the CLI and change detector.
+const DefaultDebounce = 100 * time.Millisecond
+
 // Options configures the change detector.
 type Options struct {
 	// OnState reports idle and debouncing transitions on the detector goroutine.
@@ -50,7 +53,7 @@ type CaptureFunc func(context.Context) (string, error)
 // cannot be registered the detector falls back to polling.
 func NewDetector(opts Options) *Detector {
 	if opts.Debounce <= 0 {
-		opts.Debounce = 350 * time.Millisecond
+		opts.Debounce = DefaultDebounce
 	}
 	if opts.MaxWait <= 0 {
 		opts.MaxWait = 2 * time.Second
@@ -81,8 +84,19 @@ func (d *Detector) Close() error {
 }
 
 // Next blocks until the Git signature differs from current or the context ends.
+// An empty current requests an initial capture after watches have been installed,
+// including edits saved before startup, without waiting for an event or poll.
 func (d *Detector) Next(ctx context.Context, current string, capture CaptureFunc) (string, error) {
 	d.reportState("idle")
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if current == "" {
+		signature, err := capture(ctx)
+		if err != nil || signature != current {
+			return signature, err
+		}
+	}
 	if !d.usingFS || d.watcher == nil {
 		return d.pollUntilChange(ctx, current, capture)
 	}
