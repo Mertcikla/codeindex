@@ -14,7 +14,8 @@ import (
 // WatchSession owns a warm language server for one checkout. It must only be
 // attached to working-tree builds, never temporary historical checkouts. Start
 // it before the initial SCIP build so package loading happens in parallel.
-// Go is the first adapter; subsequent languages require their own parity gate.
+// Go and TypeScript have separate sessions and parity gates. One unavailable
+// language server must not prevent the other from warming or refreshing.
 type WatchSession struct {
 	root   string
 	cfg    config.Config
@@ -29,6 +30,7 @@ type WatchSession struct {
 	// Synchronizing against the session rather than only the published base
 	// prevents a reverted edit from leaving stale content in the language server.
 	hashes map[string]string
+	web    *typeScriptSession
 }
 
 func NewWatchSession(ctx context.Context, cfg config.Config, root string) *WatchSession {
@@ -38,6 +40,7 @@ func NewWatchSession(ctx context.Context, cfg config.Config, root string) *Watch
 		abs, err = filepath.EvalSymlinks(abs)
 	}
 	s := &WatchSession{root: abs, cfg: cfg, ctx: life, cancel: cancel, ready: make(chan struct{}), hashes: map[string]string{}, err: err}
+	s.web = newTypeScriptSession(life, cfg, abs)
 	go func() {
 		defer close(s.ready)
 		if s.err != nil {
@@ -79,6 +82,7 @@ func (s *WatchSession) Close() {
 		return
 	}
 	s.cancel()
+	s.web.close()
 	<-s.ready
 	s.mu.Lock()
 

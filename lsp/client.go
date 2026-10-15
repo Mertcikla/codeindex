@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +59,7 @@ type Client struct {
 	wait     chan struct{}
 	Encoding string
 	opened   map[string]int
+	language string
 }
 
 func URI(path string) string {
@@ -74,8 +76,22 @@ func Path(uri string) (string, error) {
 // Start initializes gopls and verifies the capabilities used by the Go adapter.
 // The lifetime context owns the process, separately from individual query deadlines.
 func Start(ctx context.Context, executable, root string) (*Client, error) {
+	return start(ctx, executable, []string{"serve"}, root, "go", map[string]any{"diagnosticsTrigger": "Save"})
+}
+
+// StartTypeScript starts typescript-language-server. sdk, when set, points at
+// SCIP's tsserver.js so both producers use the same compiler and standard library.
+func StartTypeScript(ctx context.Context, executable, root, sdk string) (*Client, error) {
+	opts := map[string]any{"disableAutomaticTypingAcquisition": true, "tsserver": map[string]any{"useSyntaxServer": "never"}}
+	if sdk != "" {
+		opts["tsserver"].(map[string]any)["path"] = sdk
+	}
+	return start(ctx, executable, []string{"--stdio"}, root, "typescript", opts)
+}
+
+func start(ctx context.Context, executable string, args []string, root, language string, options map[string]any) (*Client, error) {
 	life, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(life, executable, "serve")
+	cmd := exec.CommandContext(life, executable, args...)
 	cmd.Dir = root
 	cmd.WaitDelay = time.Second
 	cleanup := configureProcess(cmd)
@@ -98,15 +114,18 @@ func Start(ctx context.Context, executable, root string) (*Client, error) {
 		_ = in.Close()
 		return nil, err
 	}
-	c := &Client{cmd: cmd, in: in, cancel: cancel, pending: map[string]chan message{}, done: make(chan struct{}), wait: make(chan struct{}), opened: map[string]int{}, Encoding: "utf-16"}
+	c := &Client{cmd: cmd, in: in, cancel: cancel, pending: map[string]chan message{}, done: make(chan struct{}), wait: make(chan struct{}), opened: map[string]int{}, Encoding: "utf-16", language: language}
 	go c.read(out)
 	go func() { _ = cmd.Wait(); cleanup(); close(c.wait) }()
 	initCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
 	var result struct {
 		Capabilities struct {
-			PositionEncoding   string          `json:"positionEncoding"`
-			DefinitionProvider json.RawMessage `json:"definitionProvider"`
+			PositionEncoding       string          `json:"positionEncoding"`
+			DefinitionProvider     json.RawMessage `json:"definitionProvider"`
+			ExecuteCommandProvider struct {
+				Commands []string `json:"commands"`
+			} `json:"executeCommandProvider"`
 		} `json:"capabilities"`
 	}
 	params := map[string]any{
@@ -116,7 +135,7 @@ func Start(ctx context.Context, executable, root string) (*Client, error) {
 			"general":      map[string]any{"positionEncodings": []string{"utf-8", "utf-16"}},
 			"textDocument": map[string]any{"definition": map[string]any{"linkSupport": true}},
 		},
-		"initializationOptions": map[string]any{"diagnosticsTrigger": "Save"},
+		"initializationOptions": options,
 	}
 	if err := c.Call(initCtx, "initialize", params, &result); err != nil {
 		c.Close()
@@ -125,6 +144,10 @@ func Start(ctx context.Context, executable, root string) (*Client, error) {
 	if v := string(result.Capabilities.DefinitionProvider); v == "" || v == "null" || v == "false" {
 		c.Close()
 		return nil, errors.New("language server does not support definitions")
+	}
+	if language == "typescript" && !slices.Contains(result.Capabilities.ExecuteCommandProvider.Commands, "typescript.tsserverRequest") {
+		c.Close()
+		return nil, errors.New("language server does not support TypeScript synchronous queries")
 	}
 	if enc := result.Capabilities.PositionEncoding; enc != "" {
 		if enc != "utf-8" && enc != "utf-16" {
@@ -302,7 +325,18 @@ func (c *Client) Sync(path string, text []byte) error {
 	version := c.opened[uri] + 1
 	c.opened[uri] = version
 	if version == 1 {
-		return c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": uri, "languageId": "go", "version": version, "text": string(text)}})
+		language := c.language
+		if language == "typescript" {
+			switch strings.ToLower(filepath.Ext(path)) {
+			case ".tsx":
+				language = "typescriptreact"
+			case ".js", ".mjs", ".cjs":
+				language = "javascript"
+			case ".jsx":
+				language = "javascriptreact"
+			}
+		}
+		return c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": uri, "languageId": language, "version": version, "text": string(text)}})
 	}
 	return c.Notify("textDocument/didChange", map[string]any{"textDocument": map[string]any{"uri": uri, "version": version}, "contentChanges": []any{map[string]any{"text": string(text)}}})
 }

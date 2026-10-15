@@ -455,6 +455,24 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		}
 	}
 	plan.run = func(context.Context) error {
+		if family == familyWeb && p.Semantics != nil && base != nil && plan.toolVersion == "0.4.0" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
+				refreshErr := p.Semantics.refreshTypeScriptLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
+				stop()
+				if refreshErr == nil {
+					emitProgress(progress, Progress{Stage: "scip", Detail: "TypeScript LSP semantic refresh · " + pr.Root})
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				emitProgress(progress, Progress{Stage: "scip", Detail: fmt.Sprintf("TypeScript LSP refresh unavailable (%v) · using SCIP", refreshErr)})
+			}
+		}
+		if family == familyWeb && p.Semantics != nil && base != nil {
+			defer p.Semantics.web.invalidate()
+		}
 		if family == familyGo && p.Semantics != nil && base != nil && plan.toolVersion == "0.2.7" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
 				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())

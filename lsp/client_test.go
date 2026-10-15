@@ -86,6 +86,12 @@ func TestClientLifecycle(t *testing.T) {
 	if err := client.CheckDocument(ctx, "/a.go"); err == nil {
 		t.Fatal("accepted a missing diagnostic report")
 	}
+	if err := client.CheckTypeScriptDocument(ctx, "/valid.ts"); err != nil {
+		t.Fatalf("TypeScript diagnostic barrier: %v", err)
+	}
+	if err := client.CheckTypeScriptDocument(ctx, "/invalid.ts"); err == nil {
+		t.Fatal("accepted an erroneous TypeScript document")
+	}
 	err = client.Call(ctx, "crash", nil, nil)
 	if err == nil {
 		t.Fatal("crashed server was accepted")
@@ -126,6 +132,22 @@ func TestLSPProcess(t *testing.T) {
 			result = req.Params
 		case "textDocument/definition":
 			result = []any{map[string]any{"targetUri": "file:///b.go", "targetSelectionRange": Range{Start: Position{Character: 3}}}}
+		case "workspace/executeCommand":
+			var params struct {
+				Arguments []json.RawMessage `json:"arguments"`
+			}
+			if json.Unmarshal(req.Params, &params) != nil || len(params.Arguments) != 3 {
+				os.Exit(1)
+			}
+			var args struct {
+				File string `json:"file"`
+			}
+			_ = json.Unmarshal(params.Arguments[1], &args)
+			var diagnostics []map[string]any
+			if args.File == "/invalid.ts" {
+				diagnostics = append(diagnostics, map[string]any{"category": "error", "text": "type mismatch"})
+			}
+			result = map[string]any{"success": true, "body": diagnostics}
 		}
 		response, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 		_, _ = fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n%s", len(response), response)

@@ -19,13 +19,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type bodySpan struct{ start, end int }
 type goEdit struct {
-	before, after        *graph.Source
-	oldBodies, newBodies []bodySpan
-	changed              []bool
-	set                  *token.FileSet
-	file                 *ast.File
+	*bodyEdit
+	set  *token.FileSet
+	file *ast.File
 }
 
 // goBodyEdit deliberately preserves all text outside function bodies, including
@@ -60,64 +57,11 @@ func goBodyEdit(before, after *graph.Source) (*goEdit, error) {
 	if err != nil || len(old) != len(current) {
 		return nil, fmt.Errorf("function membership changed")
 	}
-	a, b := 0, 0
-	changed := make([]bool, len(old))
-	for i, span := range old {
-		if !bytes.Equal(before.Text[a:span.start], after.Text[b:current[i].start]) {
-			return nil, fmt.Errorf("text outside function bodies changed")
-		}
-		changed[i] = !bytes.Equal(before.Text[span.start:span.end], after.Text[current[i].start:current[i].end])
-		a, b = span.end, current[i].end
-	}
-	if !bytes.Equal(before.Text[a:], after.Text[b:]) {
-		return nil, fmt.Errorf("text outside function bodies changed")
-	}
-	return &goEdit{before: before, after: after, oldBodies: old, newBodies: current, changed: changed, set: set, file: file}, nil
-}
-
-func (e *goEdit) offset(old int) (int, bool) {
-	delta := 0
-	for i, b := range e.oldBodies {
-		if old <= b.start {
-			return old + delta, true
-		}
-		if old < b.end {
-			if !e.changed[i] {
-				return old + delta, true
-			}
-			return 0, false
-		}
-		delta = e.newBodies[i].end - b.end
-	}
-	return old + delta, true
-}
-
-func byteRange(src *graph.Source, start, end int) []int32 {
-	sl, sc := src.Position(start)
-	el, ec := src.Position(end)
-	if sl == el {
-		return []int32{int32(sl), int32(sc), int32(ec)}
-	}
-	return []int32{int32(sl), int32(sc), int32(el), int32(ec)}
-}
-
-func (e *goEdit) remap(rng []int32, encoding string) ([]int32, bool) {
-	if len(rng) == 0 {
-		return nil, true
-	}
-	a, err := scipAnchor(e.before, &scip.Occurrence{Range: rng}, encoding)
+	edit, err := newBodyEdit(before, after, old, current)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	start, ok := e.offset(int(a.StartByte))
-	if !ok {
-		return nil, false
-	}
-	end, ok := e.offset(int(a.EndByte))
-	if !ok {
-		return nil, false
-	}
-	return byteRange(e.after, start, end), true
+	return &goEdit{bodyEdit: edit, set: set, file: file}, nil
 }
 
 func lspPosition(src *graph.Source, offset int, encoding string) lsp.Position {

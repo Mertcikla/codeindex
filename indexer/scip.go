@@ -114,18 +114,8 @@ func importSCIPReader(ctx context.Context, g *graph.Graph, project *pb.Project, 
 		if d.GetText() != "" && graph.Hash([]byte(d.GetText())) != source.Hash {
 			return fmt.Errorf("SCIP source mismatch: %s", path)
 		}
-		encoding := "utf-8"
-		declaredEncoding := true
-		switch d.GetPositionEncoding() {
-		case scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart:
-			encoding = "utf-8"
-		case scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart:
-			encoding = "utf-16"
-		case scip.PositionEncoding_UTF32CodeUnitOffsetFromLineStart:
-			encoding = "utf-32"
-		default:
-			declaredEncoding = false
-		}
+		encoding, declaredEncoding := scipSourceEncoding(d, source)
+
 		var declarations *declarationIndex
 		if scipBacked {
 			declarations = newDeclarationIndex(source)
@@ -527,7 +517,17 @@ func (table *symbols) byPath() map[string][]occurrence {
 		out[ref.anchor.Path] = append(out[ref.anchor.Path], ref)
 	}
 	for _, list := range out {
-		sort.Slice(list, func(i, j int) bool { return list[i].anchor.StartByte < list[j].anchor.StartByte })
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].anchor.StartByte != list[j].anchor.StartByte {
+				return list[i].anchor.StartByte < list[j].anchor.StartByte
+			}
+			if list[i].anchor.EndByte != list[j].anchor.EndByte {
+				return list[i].anchor.EndByte < list[j].anchor.EndByte
+			}
+			// Merged TypeScript declarations can share a reference range.
+			// Choose the same call target regardless of SCIP/LSP response order.
+			return list[i].key < list[j].key
+		})
 	}
 	return out
 }

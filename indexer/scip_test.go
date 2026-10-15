@@ -22,6 +22,19 @@ func marshalIndex(t *testing.T, idx *scip.Index) []byte {
 	return data
 }
 
+func TestMergedReferencesHaveStableCallTargetOrder(t *testing.T) {
+	for _, order := range [][]string{{"merged-b", "merged-a"}, {"merged-a", "merged-b"}} {
+		table := newSymbols()
+		for _, key := range order {
+			table.references = append(table.references, occurrence{key: key, anchor: &pb.SourceAnchor{Path: "a.ts", StartByte: 10, EndByte: 14}})
+		}
+		refs := table.byPath()["a.ts"]
+		if refs[0].key != "merged-a" || refs[1].key != "merged-b" {
+			t.Fatalf("merged declaration target order depends on producer: %+v", refs)
+		}
+	}
+}
+
 func TestSCIPAliasMetadataUsesCanonicalSymbol(t *testing.T) {
 	for _, order := range [][]int{{0, 1}, {1, 0}} {
 		for range 20 {

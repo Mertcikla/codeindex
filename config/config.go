@@ -26,18 +26,19 @@ type Config struct {
 		Dir     string `yaml:"dir"`
 	} `yaml:"web"`
 	Tools struct {
-		Gopls          string `yaml:"gopls" json:"Gopls,omitempty"`
-		SCIPGo         string `yaml:"scip_go"`
-		SCIPTypeScript string `yaml:"scip_typescript"`
-		SCIPPython     string `yaml:"scip_python"`
-		SCIPDotnet     string `yaml:"scip_dotnet"`
-		SCIPClang      string `yaml:"scip_clang"`
-		SCIPJava       string `yaml:"scip_java"`
-		SCIPDart       string `yaml:"scip_dart"`
-		SCIPPhp        string `yaml:"scip_php"`
-		SCIPRuby       string `yaml:"scip_ruby"`
-		RustAnalyzer   string `yaml:"rust_analyzer"`
-		TimeoutSeconds int    `yaml:"timeout_seconds"`
+		Gopls                    string `yaml:"gopls" json:"Gopls,omitempty"`
+		TypeScriptLanguageServer string `yaml:"typescript_language_server" json:"TypeScriptLanguageServer,omitempty"`
+		SCIPGo                   string `yaml:"scip_go"`
+		SCIPTypeScript           string `yaml:"scip_typescript"`
+		SCIPPython               string `yaml:"scip_python"`
+		SCIPDotnet               string `yaml:"scip_dotnet"`
+		SCIPClang                string `yaml:"scip_clang"`
+		SCIPJava                 string `yaml:"scip_java"`
+		SCIPDart                 string `yaml:"scip_dart"`
+		SCIPPhp                  string `yaml:"scip_php"`
+		SCIPRuby                 string `yaml:"scip_ruby"`
+		RustAnalyzer             string `yaml:"rust_analyzer"`
+		TimeoutSeconds           int    `yaml:"timeout_seconds"`
 	} `yaml:"tools"`
 }
 
@@ -53,6 +54,7 @@ func Default() Config {
 	c.Surreal.Password = "root"
 	c.Tools.SCIPGo = "scip-go"
 	c.Tools.Gopls = "gopls"
+	c.Tools.TypeScriptLanguageServer = "typescript-language-server"
 	c.Tools.SCIPTypeScript = "scip-typescript"
 	c.Tools.SCIPPython = "scip-python"
 	c.Tools.SCIPDotnet = "scip-dotnet"
@@ -87,6 +89,9 @@ func Load(path string) (Config, error) {
 // they take precedence over file and global settings. It is used by the CLI's
 // config bridge as well as Load.
 func (c *Config) ApplyEnv() {
+	if v, ok := os.LookupEnv("CODEINDEX_TYPESCRIPT_LANGUAGE_SERVER"); ok {
+		c.Tools.TypeScriptLanguageServer = v
+	}
 	if v, ok := os.LookupEnv("CODEINDEX_GOPLS"); ok {
 		c.Tools.Gopls = v
 	}

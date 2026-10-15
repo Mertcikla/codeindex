@@ -61,6 +61,46 @@ func TestSCIPUTF16AndDirectEdgeFacts(t *testing.T) {
 	}
 }
 
+func TestSCIPTypeScriptImplicitUTF16(t *testing.T) {
+	text := []byte("function target(){}\nfunction caller(){ void '😀'; target() }\n")
+	src := &graph.Source{Path: "a.ts", Language: "typescript", Text: text, Hash: graph.Hash(text)}
+	g := graph.NewGraph("repo", "snapshot")
+	g.Sources[src.Path] = src
+	calls, err := treeFacts(context.Background(), g, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := strings.Index(string(text), "target")
+	ref := strings.LastIndex(string(text), "target")
+	rangeAt := func(offset int) []int32 {
+		line, column := src.Position(offset)
+		lineStart := offset - int(column)
+		column = uint32(len(utf16.Encode([]rune(string(text[lineStart:offset])))))
+		return []int32{int32(line), int32(column), int32(column) + 6}
+	}
+	symbol := "scip-typescript npm fixture 1 `a.ts`/target()."
+	doc := &scip.Document{RelativePath: src.Path, Text: string(text), Occurrences: []*scip.Occurrence{{Range: rangeAt(def), Symbol: symbol, SymbolRoles: int32(scip.SymbolRole_Definition)}, {Range: rangeAt(ref), Symbol: symbol}}}
+	index := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: "scip-typescript", Version: "0.4.0"}}, Documents: []*scip.Document{doc}}
+	data, err := proto.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newSymbols()
+	if err := importSCIPReader(context.Background(), g, &pb.Project{Root: "."}, bytes.NewReader(data), nil, true, false, table); err != nil {
+		t.Fatal(err)
+	}
+	table.apply(g)
+	deriveCalls(g, calls, table)
+	for _, edge := range g.EdgeFacts {
+		if edge.ToFactId == "" || g.Facts[edge.ToFactId].Name != "target" {
+			t.Fatalf("Unicode call bound to wrong target: %+v", edge)
+		}
+	}
+	if len(g.EdgeFacts) != 2 {
+		t.Fatalf("edges=%d want reference and call", len(g.EdgeFacts))
+	}
+}
+
 func TestSCIPSymbolRelationships(t *testing.T) {
 	source := []byte("interface Animal {}\nclass Dog implements Animal {}\nfunction adopt(): Dog { return new Dog() }\n")
 	s := &graph.Source{Path: "a.ts", Language: "typescript", Text: source, Hash: graph.Hash(source)}

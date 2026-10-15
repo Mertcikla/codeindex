@@ -83,12 +83,13 @@ is required. Existing content-addressed database rows are not rewritten by this
 producer change. If the importer needs additional fields in future, bump the
 cache format and relationship version to invalidate insufficient caches.
 
-## Watch semantic layer (Go)
+## Watch semantic layers (Go and TypeScript)
 
 Hosts can create `indexer.NewWatchSession(ctx, cfg, root)` before the initial
 SCIP build and attach it to `ingest.Engine.Semantics`. The session warms gopls
-in parallel, lives for the checkout's watch lifetime, and is used only for the
-working tree. Close it when watching stops. Historical checkouts always use
+and typescript-language-server in parallel, lives for the checkout's watch
+lifetime, and is used only for the working tree. Close it when watching stops.
+Historical checkouts always use
 SCIP; no editor overlay is shared with a historical build.
 
 The Go adapter replaces changed function-body occurrences through LSP definition
@@ -126,10 +127,43 @@ Gorilla mux v1.8.1, pflag v1.0.10, Cobra v1.10.2, bun v1.2.18 and Gorilla
 WebSocket v1.5.3 pass this gate. In one local two-file run, bun's 1,510 facts /
 8,606 edges took 0.90 s through LSP versus 2.22 s through fresh SCIP; WebSocket
 took 0.46 s versus 0.95 s. These are full pipeline times, not server-only query
-times, and are not performance guarantees. The broader Go gate remains
-open for declaration/membership/build changes; TypeScript, Rust and Python
-adapters must follow in that order after their preceding language passes its
-broader parity gate. They are not enabled by the Go body-edit gate.
+times, and are not performance guarantees. Declaration, membership and build
+changes still use SCIP.
+
+The TypeScript adapter supports body edits in functions, methods and arrows
+with explicit return annotations, including TSX, against scip-typescript 0.4.0.
+It uses the TypeScript SDK bundled with that SCIP installation to keep compiler
+and standard-library declaration identities consistent. Definition queries map
+back to captured SCIP identities, including aliases, constructors and merged
+declarations. External identities are learned from baseline definition locations;
+an unseen external target uses SCIP. Synchronous tsserver diagnostics establish
+that queries apply to the current edit batch.
+
+Inferred APIs, constructors, object/type identities inside changed bodies,
+imports, configuration and file membership changes, ambiguous configurations,
+or unavailable servers/SDKs use SCIP. This conservative boundary preserves all
+consumed tld facts and edges; it does not attempt to synthesize unused SCIP
+metadata. Both paths publish the same reduced artifact and immutable dirty/commit
+snapshots. Rust and Python remain the next languages, in that order.
+
+Configure `tools.typescript_language_server` or
+`CODEINDEX_TYPESCRIPT_LANGUAGE_SERVER` (tld also accepts
+`TLD_INDEX_TYPESCRIPT_LANGUAGE_SERVER`). Doctor and the repository UI require a
+successful initialize handshake and tsserver-bridge capability, alongside the
+version probe. Install with `npm install -g typescript-language-server typescript`.
+
+```sh
+CODEINDEX_TEST_TS_LSP=1 go test ./indexer -run TestTypeScriptLSP -v
+CODEINDEX_TS_LSP_REPOS=/path/to/typescript-repo:/path/to/another-repo \
+  go test ./indexer -run TestTypeScriptLSPRepositoryParity -v
+```
+
+The real-tool fixture checks complete graph equality across TS/TSX, Unicode,
+aliases, overloads, constructors, external calls, reverts, multiple edited files
+and safe fallbacks. Representative one/two-file changes in points-on-curve and
+path-data-parser also pass complete graph equality. Extraction version 10 fixes
+scip-typescript's implicit UTF-16 source positions and stabilizes call selection
+for merged declarations; older extraction baselines are recaptured.
 
 The five artifacts captured from the tld database reduced from 66,271,827 to
 3,616,709 bytes (94.5%), with identical graph facts and edges on replay. Run

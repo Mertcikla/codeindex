@@ -69,7 +69,7 @@ func compactSCIPArtifact(ctx context.Context, g *graph.Graph, project *pb.Projec
 				return fmt.Errorf("SCIP source mismatch: %s", path)
 			}
 			retained := &scip.Document{RelativePath: document.RelativePath, PositionEncoding: document.PositionEncoding}
-			encoding, declared := scipPositionEncoding(document)
+			encoding, declared := scipSourceEncoding(document, source)
 			for _, occurrence := range document.Occurrences {
 				if occurrence.GetSymbol() == "" || strings.HasPrefix(occurrence.GetSymbol(), "local ") {
 					continue
@@ -159,4 +159,20 @@ func scipPositionEncoding(d *scip.Document) (string, bool) {
 	default:
 		return "utf-8", false
 	}
+}
+
+// scip-typescript 0.4.0 uses TypeScript's UTF-16 positions but leaves the SCIP
+// position encoding unset. Byte-offset guessing can accept an incorrect range
+// after a non-BMP character and bind a call to its argument instead of its
+// callee. Make this producer's encoding explicit before resolving any ranges.
+func scipSourceEncoding(d *scip.Document, source *graph.Source) (string, bool) {
+	encoding, declared := scipPositionEncoding(d)
+	if !declared && source != nil && languageFamily(source.Language) == familyWeb {
+		for _, occurrence := range d.Occurrences {
+			if strings.HasPrefix(occurrence.Symbol, "scip-typescript ") {
+				return "utf-16", true
+			}
+		}
+	}
+	return encoding, declared
 }
