@@ -47,19 +47,21 @@ type message struct {
 // Client owns one process. Calls may run concurrently; notifications and requests
 // share a single ordered writer. The reader never waits on a request caller.
 type Client struct {
-	cmd      *exec.Cmd
-	in       io.WriteCloser
-	cancel   context.CancelFunc
-	writeMu  sync.Mutex
-	mu       sync.Mutex
-	next     int64
-	pending  map[string]chan message
-	err      error
-	done     chan struct{}
-	wait     chan struct{}
-	Encoding string
-	opened   map[string]int
-	language string
+	cmd         *exec.Cmd
+	in          io.WriteCloser
+	cancel      context.CancelFunc
+	writeMu     sync.Mutex
+	mu          sync.Mutex
+	next        int64
+	pending     map[string]chan message
+	err         error
+	done        chan struct{}
+	wait        chan struct{}
+	Encoding    string
+	opened      map[string]int
+	language    string
+	rustStatus  *rustStatus
+	rustChanged chan struct{}
 }
 
 func URI(path string) string {
@@ -115,6 +117,7 @@ func start(ctx context.Context, executable string, args []string, root, language
 		return nil, err
 	}
 	c := &Client{cmd: cmd, in: in, cancel: cancel, pending: map[string]chan message{}, done: make(chan struct{}), wait: make(chan struct{}), opened: map[string]int{}, Encoding: "utf-16", language: language}
+	c.rustChanged = make(chan struct{})
 	go c.read(out)
 	go func() { _ = cmd.Wait(); cleanup(); close(c.wait) }()
 	initCtx, stop := context.WithTimeout(ctx, 30*time.Second)
@@ -122,6 +125,7 @@ func start(ctx context.Context, executable string, args []string, root, language
 	var result struct {
 		Capabilities struct {
 			PositionEncoding       string          `json:"positionEncoding"`
+			DiagnosticProvider     json.RawMessage `json:"diagnosticProvider"`
 			DefinitionProvider     json.RawMessage `json:"definitionProvider"`
 			ExecuteCommandProvider struct {
 				Commands []string `json:"commands"`
@@ -137,6 +141,11 @@ func start(ctx context.Context, executable string, args []string, root, language
 		},
 		"initializationOptions": options,
 	}
+	if language == "rust" {
+		caps := params["capabilities"].(map[string]any)
+		caps["experimental"] = map[string]any{"serverStatusNotification": true}
+		caps["textDocument"].(map[string]any)["diagnostic"] = map[string]any{}
+	}
 	if err := c.Call(initCtx, "initialize", params, &result); err != nil {
 		c.Close()
 		return nil, err
@@ -148,6 +157,12 @@ func start(ctx context.Context, executable string, args []string, root, language
 	if language == "typescript" && !slices.Contains(result.Capabilities.ExecuteCommandProvider.Commands, "typescript.tsserverRequest") {
 		c.Close()
 		return nil, errors.New("language server does not support TypeScript synchronous queries")
+	}
+	if language == "rust" {
+		if v := string(result.Capabilities.DiagnosticProvider); v == "" || v == "null" || v == "false" {
+			c.Close()
+			return nil, errors.New("rust-analyzer does not support pull diagnostics")
+		}
 	}
 	if enc := result.Capabilities.PositionEncoding; enc != "" {
 		if enc != "utf-8" && enc != "utf-16" {
@@ -252,6 +267,16 @@ func (c *Client) read(r io.Reader) {
 			return
 		}
 		if m.Method != "" {
+			if m.Method == "experimental/serverStatus" && c.language == "rust" {
+				var status rustStatus
+				if json.Unmarshal(m.Params, &status) == nil {
+					c.mu.Lock()
+					c.rustStatus = &status
+					close(c.rustChanged)
+					c.rustChanged = make(chan struct{})
+					c.mu.Unlock()
+				}
+			}
 			if len(m.ID) > 0 {
 				// No dynamic registration or edits are advertised. Answer optional
 				// server requests so they cannot deadlock initialization or queries.

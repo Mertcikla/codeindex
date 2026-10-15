@@ -98,6 +98,56 @@ func TestClientLifecycle(t *testing.T) {
 	}
 }
 
+func TestRustClientReadiness(t *testing.T) {
+	if filepath.Separator == '\\' {
+		t.Skip("subprocess fixture requires a POSIX shell")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEINDEX_LSP_HELPER", "1")
+	tool := filepath.Join(t.TempDir(), "fake-rust-analyzer")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nexec '"+strings.ReplaceAll(exe, "'", "'\\''")+"' -test.run=TestLSPProcess\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := StartRust(ctx, tool, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	deadline, stop := context.WithTimeout(ctx, 20*time.Millisecond)
+	err = client.WaitRustReady(deadline)
+	stop()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("accepted workspace without status: %v", err)
+	}
+	for _, status := range []rustStatus{{Health: "warning", Quiescent: true, Message: "missing dependency"}, {Health: "ok", Quiescent: true}} {
+		if err := client.Call(ctx, "status", status, nil); err != nil {
+			t.Fatal(err)
+		}
+		err := client.WaitRustReady(ctx)
+		if (err == nil) != (status.Health == "ok") {
+			t.Fatalf("status %+v: %v", status, err)
+		}
+	}
+	if err := client.CheckDocument(ctx, "/valid.rs"); err != nil {
+		t.Fatalf("Rust pull diagnostics: %v", err)
+	}
+	if err := client.CheckDocument(ctx, "/invalid.rs"); err == nil {
+		t.Fatal("accepted invalid Rust diagnostics")
+	}
+	t.Setenv("CODEINDEX_RUST_NO_DIAGNOSTICS", "1")
+	if other, err := StartRust(ctx, tool, t.TempDir()); err == nil {
+		other.Close()
+		t.Fatal("accepted Rust server without pull diagnostics")
+	} else if !strings.Contains(err.Error(), "pull diagnostics") {
+		t.Fatalf("capability check: %v", err)
+	}
+}
+
 func TestLSPProcess(t *testing.T) {
 	if os.Getenv("CODEINDEX_LSP_HELPER") != "1" {
 		return
@@ -127,7 +177,28 @@ func TestLSPProcess(t *testing.T) {
 			// Exercise server requests while a client request is pending.
 			request := `{"jsonrpc":"2.0","id":"config","method":"workspace/configuration","params":{"items":[{}]}}`
 			_, _ = fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n%s", len(request), request)
-			result = map[string]any{"capabilities": map[string]any{"definitionProvider": true}}
+			capabilities := map[string]any{"definitionProvider": true, "diagnosticProvider": map[string]any{"interFileDependencies": true}}
+			if os.Getenv("CODEINDEX_RUST_NO_DIAGNOSTICS") == "1" {
+				delete(capabilities, "diagnosticProvider")
+			}
+			result = map[string]any{"capabilities": capabilities}
+		case "status":
+			notification, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "experimental/serverStatus", "params": req.Params})
+			_, _ = fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n%s", len(notification), notification)
+		case "textDocument/diagnostic":
+			var params struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
+			if strings.HasSuffix(params.TextDocument.URI, ".rs") {
+				items := []map[string]any{}
+				if strings.HasSuffix(params.TextDocument.URI, "/invalid.rs") {
+					items = append(items, map[string]any{"severity": 1, "message": "type mismatch"})
+				}
+				result = map[string]any{"kind": "full", "items": items}
+			}
 		case "echo":
 			result = req.Params
 		case "textDocument/definition":

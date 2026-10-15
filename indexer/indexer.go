@@ -455,6 +455,24 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		}
 	}
 	plan.run = func(context.Context) error {
+		if family == familyRust && p.Semantics != nil && base != nil && plan.toolVersion == rustLSPVersion && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
+				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())
+				refreshErr := p.Semantics.refreshRustLSP(lspCtx, root, pr, snap, g, base, cached, plan.artifact)
+				stop()
+				if refreshErr == nil {
+					emitProgress(progress, Progress{Stage: "scip", Detail: "Rust LSP semantic refresh · " + pr.Root})
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				emitProgress(progress, Progress{Stage: "scip", Detail: fmt.Sprintf("Rust LSP refresh unavailable (%v) · using SCIP", refreshErr)})
+			}
+		}
+		if family == familyRust && p.Semantics != nil && base != nil {
+			defer p.Semantics.rust.invalidate()
+		}
 		if family == familyWeb && p.Semantics != nil && base != nil && plan.toolVersion == "0.4.0" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
 				lspCtx, stop := context.WithTimeout(ctx, p.Config.ToolTimeout())

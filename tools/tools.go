@@ -59,7 +59,7 @@ func All() []Tool {
 		{Family: "dart", Name: "scip-dart", VersionArgs: []string{"--version"}, MinVersion: "1.6.2", InstallHint: "dart pub global activate scip_dart", DownloadURL: "https://pub.dev/packages/scip_dart", path: func(c config.Config) string { return c.Tools.SCIPDart }},
 		{Family: "php", Name: "scip-php", VersionArgs: []string{"--help"}, InstallHint: "composer global require davidrjenni/scip-php", DownloadURL: "https://github.com/davidrjenni/scip-php", path: func(c config.Config) string { return c.Tools.SCIPPhp }},
 		{Family: "ruby", Name: "scip-ruby", VersionArgs: []string{"--version"}, MinVersion: "0.5.0", InstallHint: "gem install scip-ruby", DownloadURL: "https://github.com/sourcegraph/scip-ruby/releases", path: func(c config.Config) string { return c.Tools.SCIPRuby }},
-		{Family: "rust", Name: "rust-analyzer", VersionArgs: []string{"--version"}, InstallHint: "rustup component add rust-analyzer", DownloadURL: "https://rust-analyzer.github.io/", path: func(c config.Config) string { return c.Tools.RustAnalyzer }},
+		{Family: "rust", Name: "rust-analyzer", VersionArgs: []string{"--version"}, LanguageServer: true, MinVersion: "1.95.0", InstallHint: "rustup component add rust-analyzer rust-src", DownloadURL: "https://rust-analyzer.github.io/", path: func(c config.Config) string { return c.Tools.RustAnalyzer }},
 	}
 }
 
@@ -222,7 +222,9 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 		if err == nil {
 			defer func() { _ = os.RemoveAll(root) }()
 			var client *lsp.Client
-			if t.Family == "web" {
+			if t.Family == "rust" {
+				client, err = lsp.StartRust(probe, path, root)
+			} else if t.Family == "web" {
 				client, err = lsp.StartTypeScript(probe, path, root, "")
 			} else {
 				client, err = lsp.Start(probe, path, root)

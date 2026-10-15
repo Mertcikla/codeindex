@@ -89,6 +89,23 @@ func TestGoToolsIncludeLanguageServerHealth(t *testing.T) {
 	}
 }
 
+func TestRustToolsIncludeLanguageServerHealth(t *testing.T) {
+	selected := ForFamilies([]string{"rust"})
+	if len(selected) != 1 || selected[0].Name != "rust-analyzer" || !selected[0].LanguageServer {
+		t.Fatalf("Rust tools: %+v", selected)
+	}
+	tool := filepath.Join(t.TempDir(), "rust-analyzer")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho 'rust-analyzer 1.95.0 (59807616 2026-04-14)'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Tools.RustAnalyzer = tool
+	status := CheckTools(context.Background(), cfg, selected)[0]
+	if status.Found || !strings.Contains(status.Error, "LSP health check:") || status.Version == "" {
+		t.Fatalf("accepted a version-only fake Rust server: %+v", status)
+	}
+}
+
 func TestTypeScriptToolsIncludeLanguageServerHealth(t *testing.T) {
 	selected := ForFamilies([]string{"web"})
 	if len(selected) != 2 || selected[1].Name != "typescript-language-server" || !selected[1].LanguageServer {

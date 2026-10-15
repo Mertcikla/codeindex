@@ -83,14 +83,14 @@ is required. Existing content-addressed database rows are not rewritten by this
 producer change. If the importer needs additional fields in future, bump the
 cache format and relationship version to invalidate insufficient caches.
 
-## Watch semantic layers (Go and TypeScript)
+## Watch semantic layers (Go, TypeScript and Rust)
 
 Hosts can create `indexer.NewWatchSession(ctx, cfg, root)` before the initial
-SCIP build and attach it to `ingest.Engine.Semantics`. The session warms gopls
-and typescript-language-server in parallel, lives for the checkout's watch
+SCIP build and attach it to `ingest.Engine.Semantics`. The session warms gopls,
+typescript-language-server and rust-analyzer in parallel, lives for the checkout's watch
 lifetime, and is used only for the working tree. Close it when watching stops.
-Historical checkouts always use
-SCIP; no editor overlay is shared with a historical build.
+Historical checkouts always use SCIP; no editor overlay is shared with a
+historical build.
 
 The Go adapter replaces changed function-body occurrences through LSP definition
 queries, synchronizing the entire edit batch before querying and checking pull
@@ -144,7 +144,7 @@ imports, configuration and file membership changes, ambiguous configurations,
 or unavailable servers/SDKs use SCIP. This conservative boundary preserves all
 consumed tld facts and edges; it does not attempt to synthesize unused SCIP
 metadata. Both paths publish the same reduced artifact and immutable dirty/commit
-snapshots. Rust and Python remain the next languages, in that order.
+snapshots.
 
 Configure `tools.typescript_language_server` or
 `CODEINDEX_TYPESCRIPT_LANGUAGE_SERVER` (tld also accepts
@@ -164,6 +164,42 @@ and safe fallbacks. Representative one/two-file changes in points-on-curve and
 path-data-parser also pass complete graph equality. Extraction version 10 fixes
 scip-typescript's implicit UTF-16 source positions and stabilizes call selection
 for merged declarations; older extraction baselines are recaptured.
+
+The Rust adapter supports ordinary function/method body edits using
+`rust-analyzer 1.95.0 (59807616 2026-04-14)` for both SCIP and LSP. Other
+versions use SCIP until validated. Workspace readiness and native pull
+diagnostics precede definition queries; unresolved references also require
+SCIP because native diagnostics can omit unresolved functions. Flycheck on
+save is disabled, avoiding a cargo check for each edit.
+
+Declarations, Cargo/build inputs, membership changes, const/async/opaque-return
+bodies, macros, attributes and nested items inside changed bodies use SCIP.
+Edits involving captured operator implementations also use SCIP because
+goto-definition omits operator desugaring edges; captured Deref implementations
+conservatively require SCIP for all body edits. Known external targets retain
+their exact SCIP keys, intersecting definition and macro-expansion identities
+to distinguish methods such as i32/i64 `abs`. Unseen or ambiguous targets use
+SCIP. External operator occurrences without captured targets are unused by
+tld and are omitted rather than reconstructed.
+
+Configure the shared binary with `tools.rust_analyzer`,
+`CODEINDEX_RUST_ANALYZER`, or tld's `index.tools.rust_analyzer` /
+`TLD_INDEX_RUST_ANALYZER`. Install with
+`rustup component add rust-analyzer rust-src`. Doctor and the repository UI
+check LSP initialization and pull-diagnostic capability in addition to the
+version probe. The same reduced artifact, drift checks, dirty snapshots and
+commit publication apply to the Rust path.
+
+```sh
+CODEINDEX_TEST_RUST_LSP=1 go test ./indexer -run TestRustLSP -v
+CODEINDEX_RUST_LSP_REPOS=/path/to/rust-repo:/path/to/another-repo \
+  go test ./indexer -run TestRustLSPRepositoryParity -v
+```
+
+Real-tool fixtures cover aliases, methods, trait implementations, fields,
+closures, Unicode, external macro-generated methods, multiple files, reverts
+and fallbacks. Complete persisted fact/edge comparisons pass for one/two-file
+changes in imagesize 0.13.0 and unicode-vo 0.1.0. Python remains pending.
 
 The five artifacts captured from the tld database reduced from 66,271,827 to
 3,616,709 bytes (94.5%), with identical graph facts and edges on replay. Run
