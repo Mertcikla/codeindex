@@ -66,14 +66,32 @@ type Client struct {
 }
 
 func URI(path string) string {
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	path = filepath.ToSlash(path)
+	if filepath.Separator == '\\' {
+		if strings.HasPrefix(path, "//") {
+			host, rest, _ := strings.Cut(strings.TrimPrefix(path, "//"), "/")
+			return (&url.URL{Scheme: "file", Host: host, Path: "/" + rest}).String()
+		}
+		if len(path) >= 2 && path[1] == ':' {
+			path = "/" + path
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 func Path(uri string) (string, error) {
 	u, err := url.Parse(uri)
-	if err != nil || u.Scheme != "file" || (u.Host != "" && u.Host != "localhost") {
+	if err != nil || u.Scheme != "file" || (filepath.Separator != '\\' && u.Host != "" && u.Host != "localhost") {
 		return "", fmt.Errorf("unsupported file URI %q", uri)
 	}
-	return filepath.FromSlash(u.Path), nil
+	path := u.Path
+	if filepath.Separator == '\\' {
+		if u.Host != "" && u.Host != "localhost" {
+			path = "//" + u.Host + path
+		} else if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+			path = path[1:]
+		}
+	}
+	return filepath.FromSlash(path), nil
 }
 
 // Start initializes gopls and verifies the capabilities used by the Go adapter.
