@@ -9,7 +9,35 @@ import (
 	"testing"
 
 	"github.com/mertcikla/codeindex/config"
+	"github.com/mertcikla/codeindex/lsp"
 )
+
+func TestMatchesTypeScriptHealthDefinition(t *testing.T) {
+	health := filepath.Join(t.TempDir(), "space π # % +", "__codeindex_health__.ts")
+	uri := lsp.URI(health)
+	for _, tt := range []struct {
+		name string
+		uri  string
+		line int
+		char int
+		want bool
+	}{
+		{name: "canonical", uri: uri, char: 9, want: true},
+		{name: "alternate escapes", uri: strings.ReplaceAll(uri, "__codeindex", "%5F%5Fcodeindex"), char: 9, want: true},
+		{name: "different file", uri: lsp.URI(health + ".other"), char: 9},
+		{name: "different line", uri: uri, line: 1, char: 9},
+		{name: "different character", uri: uri, char: 10},
+		{name: "malformed escape", uri: uri + "%zz", char: 9},
+		{name: "non-file URI", uri: "https://example.com/health.ts", char: 9},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loc := lsp.Location{URI: tt.uri, Range: lsp.Range{Start: lsp.Position{Line: tt.line, Character: tt.char}}}
+			if got := matchesTypeScriptHealthDefinition(health, loc); got != tt.want {
+				t.Errorf("matchesTypeScriptHealthDefinition(%q, %+v) = %v, want %v", health, loc, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestTypeScriptSDK(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {

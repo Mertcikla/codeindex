@@ -87,9 +87,25 @@ func checkTypeScriptHealth(ctx context.Context, executable, root string, cfg con
 		return err
 	}
 	for _, loc := range locations {
-		if loc.URI == lsp.URI(health) && loc.Range.Start.Line == 0 && loc.Range.Start.Character == 9 {
+		if matchesTypeScriptHealthDefinition(health, loc) {
 			return nil
 		}
 	}
 	return fmt.Errorf("TypeScript language server returned no matching health definition")
+}
+
+func matchesTypeScriptHealthDefinition(health string, loc lsp.Location) bool {
+	if loc.Range.Start.Line != 0 || loc.Range.Start.Character != 9 {
+		return false
+	}
+	path, err := lsp.Path(loc.URI)
+	if err != nil {
+		return false
+	}
+	path, health = filepath.Clean(path), filepath.Clean(health)
+	// Servers may escape the drive colon or change the drive letter's case.
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(path, health)
+	}
+	return path == health
 }
