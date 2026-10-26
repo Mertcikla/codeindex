@@ -643,7 +643,7 @@ func (p Pipeline) planProject(ctx context.Context, g *graph.Graph, snap *pb.Snap
 		}
 		// Historical checkouts can resolve installed dependencies differently.
 		// Establish a live SCIP baseline before reusing their web semantics.
-		if family == familyWeb && p.Semantics != nil && base != nil && base.Snapshot.Provenance != "commit" && plan.toolVersion == "0.4.0" && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
+		if family == familyWeb && p.Semantics != nil && base != nil && base.Snapshot.Provenance != "commit" && typeScriptLSPProducer(plan.toolVersion) && base.Snapshot.ToolVersions[spec.name] == plan.toolVersion {
 			if cached, ok := base.Graph.ProjectArtifacts[projectKey]; ok {
 				compilerCtx, compilerStop := context.WithTimeout(ctx, p.Config.ToolTimeout())
 				refreshed, compilerErr := p.Semantics.refreshTypeScriptCompiler(compilerCtx, root, pr, snap, g, base, cached)

@@ -35,6 +35,12 @@ func tsConstructor(raw string, known map[string]bool) string {
 	return raw
 }
 
+// These producer versions pass the Docker LSP/SCIP graph parity fixture. The
+// private compiler worker retains its separate, stricter version gate.
+func typeScriptLSPProducer(version string) bool {
+	return version == "0.4.0" || version == "0.5.2"
+}
+
 func (s *WatchSession) refreshTypeScriptLSP(ctx context.Context, root string, project *pb.Project, snap *pb.Snapshot, g *graph.Graph, base *IncrementalBase, cached graph.ProjectArtifact, artifact string) error {
 	edits, err := typeScriptEdits(project, snap, g, base)
 	if err != nil {

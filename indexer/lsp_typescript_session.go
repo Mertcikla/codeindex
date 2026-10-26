@@ -96,36 +96,12 @@ func (s *typeScriptSession) warm(projectDir string) {
 	_ = s.client.TypeScriptRequest(ctx, "projectInfo", map[string]any{"file": first, "needFileNameList": false}, &ignored)
 }
 
-// Resolve the same SDK that Node resolves from scip-typescript's entry point.
-// A wrapper with no accessible SDK is unsupported; using a different compiler
-// would give different stdlib declaration sets and could silently lose edges.
-func typeScriptSDK(cfg config.Config) (string, error) {
-	exe, err := tools.ResolveName(cfg.Tools.SCIPTypeScript)
-	if err != nil {
-		return "", err
-	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", err
-	}
-	for dir := filepath.Dir(exe); ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "node_modules", "typescript", "lib", "tsserver.js")
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-		if filepath.Dir(dir) == dir {
-			break
-		}
-	}
-	return "", fmt.Errorf("cannot resolve scip-typescript's TypeScript SDK from %s", exe)
-}
-
 func (s *typeScriptSession) start() (*lsp.Client, error) {
 	exe, err := tools.ResolveName(s.cfg.Tools.TypeScriptLanguageServer)
 	if err != nil {
 		return nil, err
 	}
-	sdk, err := typeScriptSDK(s.cfg)
+	sdk, err := tools.TypeScriptSDK(s.ctx, s.cfg.Tools.SCIPTypeScript)
 	if err != nil {
 		return nil, err
 	}

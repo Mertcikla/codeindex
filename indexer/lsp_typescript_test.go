@@ -47,6 +47,14 @@ func TestTypeScriptLSPSemanticParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	root := t.TempDir()
+	if sdk := os.Getenv("CODEINDEX_TEST_TS_WORKSPACE_SDK"); sdk != "" {
+		if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(sdk, filepath.Join(root, "node_modules", "typescript")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	put := func(name, code string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, name), []byte(code), 0600); err != nil {

@@ -134,9 +134,13 @@ func TestTypeScriptToolsIncludeLanguageServerHealth(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.Tools.TypeScriptLanguageServer = tool
+	cfg.Tools.SCIPTypeScript = filepath.Join(t.TempDir(), "missing-scip-typescript")
 	status := CheckTools(context.Background(), cfg, selected[1:])[0]
 	if status.Found || !strings.Contains(status.Error, "LSP health check:") {
 		t.Fatalf("accepted a version-only fake server: %+v", status)
+	}
+	if !strings.HasSuffix(status.InstallHint, "typescript@6") || !strings.Contains(status.Error, status.InstallHint) {
+		t.Fatalf("missing TypeScript SDK repair hint: %+v", status)
 	}
 }
 

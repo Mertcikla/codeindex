@@ -178,7 +178,7 @@ func start(ctx context.Context, executable string, args []string, root, language
 	}
 	if language == "typescript" && !slices.Contains(result.Capabilities.ExecuteCommandProvider.Commands, "typescript.tsserverRequest") {
 		c.Close()
-		return nil, errors.New("language server does not support TypeScript synchronous queries")
+		return nil, errors.New("language server does not support TypeScript synchronous queries (typescript.tsserverRequest); use typescript-language-server 4.4.1 or newer")
 	}
 	if language == "rust" {
 		if v := string(result.Capabilities.DiagnosticProvider); v == "" || v == "null" || v == "false" {

@@ -132,9 +132,9 @@ times, and are not performance guarantees. Declaration, membership and build
 changes still use SCIP.
 
 The TypeScript adapter supports body edits in functions, methods and arrows
-with explicit return annotations, including TSX, against scip-typescript 0.4.0.
-It uses the TypeScript SDK bundled with that SCIP installation to keep compiler
-and standard-library declaration identities consistent. Definition queries map
+with explicit return annotations, including TSX, against scip-typescript 0.4.0
+and 0.5.2. It uses the SDK bundled with the configured SCIP installation to keep
+compiler and standard-library declaration identities consistent. Definition queries map
 back to captured SCIP identities, including aliases, constructors and merged
 declarations. External identities are learned from baseline definition locations;
 an unseen external target uses SCIP. Synchronous tsserver diagnostics establish
@@ -150,14 +150,34 @@ snapshots.
 Configure `tools.typescript_language_server` or
 `CODEINDEX_TYPESCRIPT_LANGUAGE_SERVER` (tld also accepts
 `TLD_INDEX_TYPESCRIPT_LANGUAGE_SERVER`). Doctor and the repository UI require a
-successful initialize handshake and tsserver-bridge capability, alongside the
-version probe. Install with `npm install -g typescript-language-server typescript`.
+successful initialize handshake, tsserver-bridge capability, synchronous
+diagnostics and a definition query, alongside the version probe. Language-server
+compatibility is capability-based; the tested minimum is 4.4.1. Servers without
+`typescript.tsserverRequest` use SCIP for edits.
+
+Install with `npm install -g typescript-language-server typescript@6`.
+TypeScript 7 installations can lack `lib/tsserver.js`, which this language server
+requires. Health checks and watch mode use the SDK resolved from the configured
+SCIP installation, including nested, hoisted and pnpm dependencies. This lets
+projects and global installations use TypeScript 7 while SCIP and the LSP share
+a JavaScript SDK. Without SCIP, the health check uses the language server's own
+SDK discovery; a TypeScript installation without `tsserver.js` reports the repair
+command above. Native TypeScript 7 LSP servers do not expose the tsserver bridge;
+they cannot provide this incremental path.
 
 ```sh
 CODEINDEX_TEST_TS_LSP=1 go test ./indexer -run TestTypeScriptLSP -v
 CODEINDEX_TS_LSP_REPOS=/path/to/typescript-repo:/path/to/another-repo \
   go test ./indexer -run TestTypeScriptLSPRepositoryParity -v
+# Isolated npm/version matrix, including expected failures and SCIP graph parity:
+./scripts/test-typescript-compat.sh
 ```
+
+The Docker matrix covers TypeScript 4.9.5, 5.6.3, 5.9.3, 6.0.3 and 7.0.2;
+language servers 4.3.4, 4.4.1, 5.1.3 and 6.0.2; and SCIP 0.4.0 and 0.5.2.
+It checks unsupported installations and repair hints, diagnostics after unsaved
+edits, and full graph parity with TypeScript 7 in the workspace and global npm
+installation. Each combination installs its tools in a fresh container.
 
 The real-tool fixture checks complete graph equality across TS/TSX, Unicode,
 aliases, overloads, constructors, external calls, reverts, multiple edited files

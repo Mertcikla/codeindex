@@ -51,7 +51,7 @@ func All() []Tool {
 		{Family: "go", Name: "scip-go", VersionArgs: []string{"--version"}, MinVersion: "0.2.7", InstallHint: "go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.7", DownloadURL: "https://github.com/scip-code/scip-go/releases/tag/v0.2.7", path: func(c config.Config) string { return c.Tools.SCIPGo }},
 		{Family: "go", Name: "gopls", VersionArgs: []string{"version"}, LanguageServer: true, InstallHint: "go install golang.org/x/tools/gopls@latest", DownloadURL: "https://go.dev/gopls/", path: func(c config.Config) string { return c.Tools.Gopls }},
 		{Family: "web", Name: "scip-typescript", VersionArgs: []string{"--version"}, MinVersion: "0.4.0", InstallHint: "npm install -g @sourcegraph/scip-typescript", DownloadURL: "https://github.com/sourcegraph/scip-typescript/releases", path: func(c config.Config) string { return c.Tools.SCIPTypeScript }},
-		{Family: "web", Name: "typescript-language-server", VersionArgs: []string{"--version"}, LanguageServer: true, MinVersion: "5.1.3", InstallHint: "npm install -g typescript-language-server typescript", DownloadURL: "https://github.com/typescript-language-server/typescript-language-server", path: func(c config.Config) string { return c.Tools.TypeScriptLanguageServer }},
+		{Family: "web", Name: "typescript-language-server", VersionArgs: []string{"--version"}, LanguageServer: true, MinVersion: "4.4.1", InstallHint: "npm install -g typescript-language-server typescript@6", DownloadURL: "https://github.com/typescript-language-server/typescript-language-server", path: func(c config.Config) string { return c.Tools.TypeScriptLanguageServer }},
 		{Family: "python", Name: "scip-python", VersionArgs: []string{"--version"}, MinVersion: "0.6.6", InstallHint: "npm install -g @sourcegraph/scip-python", DownloadURL: "https://github.com/sourcegraph/scip-python/releases", path: func(c config.Config) string { return c.Tools.SCIPPython }},
 		{Family: "python", Name: "pyright-langserver", LanguageServer: true, MinVersion: "1.1.409", InstallHint: "npm install -g pyright", DownloadURL: "https://github.com/microsoft/pyright", path: func(c config.Config) string { return c.Tools.Pyright }},
 		{Family: "dotnet", Name: "scip-dotnet", VersionArgs: []string{"--version"}, MinVersion: "0.2.14", InstallHint: "dotnet tool install --global scip-dotnet", DownloadURL: "https://github.com/sourcegraph/scip-dotnet/releases", path: func(c config.Config) string { return c.Tools.SCIPDotnet }},
@@ -219,7 +219,12 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 		s.Version = probeVersion(ctx, path, t.VersionArgs)
 	}
 	if t.LanguageServer {
-		probe, stop := context.WithTimeout(ctx, versionTimeout)
+		// TypeScript also loads and queries a project; allow cold SDK startup.
+		timeout := versionTimeout
+		if t.Family == "web" {
+			timeout = 15 * time.Second
+		}
+		probe, stop := context.WithTimeout(ctx, timeout)
 		defer stop()
 		root, err := os.MkdirTemp("", "codeindex-lsp-health-")
 		if err == nil {
@@ -247,7 +252,7 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 			} else if t.Family == "rust" {
 				client, err = lsp.StartRust(probe, path, root)
 			} else if t.Family == "web" {
-				client, err = lsp.StartTypeScript(probe, path, root, "")
+				err = checkTypeScriptHealth(probe, path, root, cfg)
 			} else {
 				client, err = lsp.Start(probe, path, root)
 			}
@@ -258,6 +263,9 @@ func checkOne(ctx context.Context, t Tool, cfg config.Config) Status {
 		if err != nil {
 			s.Found = false
 			s.Error = "LSP health check: " + err.Error()
+			if t.Family == "web" {
+				s.Error += "; install with: " + t.InstallHint
+			}
 		}
 	}
 	if t.MinVersion != "" {
